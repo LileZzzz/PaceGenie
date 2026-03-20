@@ -6,6 +6,9 @@ from agent.nodes import generate_response, reflect_on_answer, retrieve_context
 from agent.state import AgentState
 from agent.tools import ALL_TOOLS
 
+_memory = MemorySaver()
+_graph: object | None = None
+
 
 def _get_latest_assistant_text(state: AgentState) -> str:
     """Read the latest assistant content across tuple and LangChain message formats."""
@@ -43,17 +46,20 @@ def route_after_generate(state: AgentState) -> str:
 
     last_message = messages[-1]
 
+    # NOTE: LangChain AIMessage carries tool_calls, while tuple messages do not.
     if hasattr(last_message, "tool_calls") and last_message.tool_calls:
         return "tools"
 
     return _should_reflect(state)
 
 
-def build_graph() -> object:
-    """Build the PaceGenie ReAct agent with tool calling, reflection, and memory."""
-    memory = MemorySaver()
-    graph = StateGraph(AgentState)
+def get_graph() -> object:
+    """Return a singleton compiled graph to preserve memory and avoid rebuild overhead."""
+    global _graph
+    if _graph is not None:
+        return _graph
 
+    graph = StateGraph(AgentState)
     tool_node = ToolNode(ALL_TOOLS)
 
     graph.add_node("retrieve_context", retrieve_context)
@@ -77,4 +83,10 @@ def build_graph() -> object:
     graph.add_edge("tools", "generate_response")
     graph.add_edge("reflect_on_answer", "generate_response")
 
-    return graph.compile(checkpointer=memory)
+    _graph = graph.compile(checkpointer=_memory)
+    return _graph
+
+
+def build_graph() -> object:
+    """Keep backward compatibility while delegating to the singleton graph builder."""
+    return get_graph()

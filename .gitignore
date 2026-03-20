@@ -7,4 +7,5 @@ wheels/
 .venv
 .env
 .cursor/
+.cursorrules
 docs/

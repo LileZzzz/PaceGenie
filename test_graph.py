@@ -6,6 +6,7 @@ from agent.graph import build_graph
 
 
 def main() -> None:
+    """Run two sequential turns to validate memory and tool-routing behavior."""
     graph = build_graph()
 
     first_result = graph.invoke(
