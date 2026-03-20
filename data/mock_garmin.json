@@ -1,0 +1,129 @@
+{
+  "user_id": "demo_user",
+  "profile": {
+    "name": "Demo Runner",
+    "age": 26,
+    "max_hr": 192,
+    "resting_hr": 52
+  },
+  "recent_runs": [
+    {
+      "date": "2026-03-05",
+      "distance_km": 8.0,
+      "duration_minutes": 52,
+      "avg_pace_per_km": "6:28",
+      "avg_hr": 140,
+      "max_hr": 158,
+      "elevation_gain_m": 45,
+      "type": "easy"
+    },
+    {
+      "date": "2026-03-07",
+      "distance_km": 14.0,
+      "duration_minutes": 87,
+      "avg_pace_per_km": "6:12",
+      "avg_hr": 150,
+      "max_hr": 172,
+      "elevation_gain_m": 135,
+      "type": "long"
+    },
+    {
+      "date": "2026-03-08",
+      "distance_km": 4.5,
+      "duration_minutes": 32,
+      "avg_pace_per_km": "7:10",
+      "avg_hr": 128,
+      "max_hr": 142,
+      "elevation_gain_m": 20,
+      "type": "easy"
+    },
+    {
+      "date": "2026-03-10",
+      "distance_km": 8.0,
+      "duration_minutes": 43,
+      "avg_pace_per_km": "5:22",
+      "avg_hr": 165,
+      "max_hr": 178,
+      "elevation_gain_m": 55,
+      "type": "tempo"
+    },
+    {
+      "date": "2026-03-11",
+      "distance_km": 4.0,
+      "duration_minutes": 27,
+      "avg_pace_per_km": "6:45",
+      "avg_hr": 135,
+      "max_hr": 150,
+      "elevation_gain_m": 15,
+      "type": "easy"
+    },
+    {
+      "date": "2026-03-12",
+      "distance_km": 8.0,
+      "duration_minutes": 45,
+      "avg_pace_per_km": "5:38",
+      "avg_hr": 162,
+      "max_hr": 185,
+      "elevation_gain_m": 40,
+      "type": "interval"
+    },
+    {
+      "date": "2026-03-14",
+      "distance_km": 16.0,
+      "duration_minutes": 99,
+      "avg_pace_per_km": "6:10",
+      "avg_hr": 152,
+      "max_hr": 174,
+      "elevation_gain_m": 150,
+      "type": "long"
+    },
+    {
+      "date": "2026-03-15",
+      "distance_km": 5.2,
+      "duration_minutes": 37,
+      "avg_pace_per_km": "7:05",
+      "avg_hr": 130,
+      "max_hr": 145,
+      "elevation_gain_m": 25,
+      "type": "easy"
+    },
+    {
+      "date": "2026-03-17",
+      "distance_km": 10.0,
+      "duration_minutes": 53,
+      "avg_pace_per_km": "5:18",
+      "avg_hr": 168,
+      "max_hr": 180,
+      "elevation_gain_m": 65,
+      "type": "tempo"
+    },
+    {
+      "date": "2026-03-18",
+      "distance_km": 6.0,
+      "duration_minutes": 40,
+      "avg_pace_per_km": "6:35",
+      "avg_hr": 138,
+      "max_hr": 155,
+      "elevation_gain_m": 30,
+      "type": "easy"
+    }
+  ],
+  "weekly_summary": {
+    "this_week_km": 45.2,
+    "last_week_km": 38.5,
+    "4_week_avg_km": 40.0
+  },
+  "personal_bests": {
+    "5k_minutes": 25.5,
+    "10k_minutes": 54.0,
+    "half_marathon_minutes": 118.0
+  },
+  "injury_history": ["2025-08 left knee iliotibial band syndrome"],
+  "training_zones": {
+    "zone1_max_hr": 135,
+    "zone2_max_hr": 152,
+    "zone3_max_hr": 163,
+    "zone4_max_hr": 173,
+    "zone5_max_hr": 192
+  }
+}
