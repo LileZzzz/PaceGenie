@@ -8,4 +8,6 @@ wheels/
 .env
 .cursor/
 .cursorrules
+.langgraph_api
+langgraph.json
 docs/

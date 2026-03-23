@@ -104,7 +104,9 @@ def _filter_runs_by_days(runs: list[RunRecord], days: int) -> list[RunRecord]:
     return runs[-safe_days:]
 
 
-def _split_runs_by_week(runs: list[RunRecord]) -> tuple[list[RunRecord], list[RunRecord]]:
+def _split_runs_by_week(
+    runs: list[RunRecord],
+) -> tuple[list[RunRecord], list[RunRecord]]:
     """Split runs into this-week and last-week buckets for volume trend analysis."""
     cutoff = datetime.now() - timedelta(days=7)
     this_week_runs = [run for run in runs if _parse_iso_date(run["date"]) >= cutoff]
@@ -129,16 +131,21 @@ def _calculate_intensity_distribution(runs: list[RunRecord]) -> dict[str, float]
     for run in runs:
         bucket = INTENSITY_MAP.get(run.get("type", "easy"), "easy")
         intensity_km[bucket] = intensity_km.get(bucket, 0.0) + run["distance_km"]
-    return {key: round(value / total_km * 100, 1) for key, value in intensity_km.items()}
+    return {
+        key: round(value / total_km * 100, 1) for key, value in intensity_km.items()
+    }
 
 
 # ---------------------------------------------------------------------------
 # Tool 1 - get_recent_runs
 # ---------------------------------------------------------------------------
 
+
 class GetRecentRunsInput(BaseModel):
     user_id: str = Field(description="Unique user identifier")
-    days: int = Field(default=7, description="Number of recent days to query, default 7")
+    days: int = Field(
+        default=7, description="Number of recent days to query, default 7"
+    )
 
 
 @tool(args_schema=GetRecentRunsInput)
@@ -150,25 +157,33 @@ def get_recent_runs(user_id: str, days: int = 7) -> str:
     try:
         data = _load_mock_data()
         recent = _filter_runs_by_days(data.get("recent_runs", []), days)
-        payload: RecentRunsPayload = {"user_id": user_id, "runs": recent, "days": max(days, 1)}
-        return json.dumps(payload, ensure_ascii=False)
-    except Exception as error:
-        fallback_data = _load_mock_data()
         payload: RecentRunsPayload = {
             "user_id": user_id,
-            "runs": fallback_data.get("recent_runs", []),
+            "runs": recent,
             "days": max(days, 1),
         }
-        return json.dumps(payload | {"note": f"Fallback used: {error}"}, ensure_ascii=False)
+        return json.dumps(payload, ensure_ascii=False)
+    except Exception as e:
+        print(f"[tools] get_recent_runs error: {e}")
+        data = _load_mock_data()
+        payload: RecentRunsPayload = {
+            "user_id": user_id,
+            "runs": data.get("recent_runs", []),
+            "days": max(days, 1),
+        }
+        return json.dumps(payload, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
 # Tool 2 - get_training_load
 # ---------------------------------------------------------------------------
 
+
 class GetTrainingLoadInput(BaseModel):
     user_id: str = Field(description="Unique user identifier")
-    days: int = Field(default=14, description="Number of recent days to analyze, default 14")
+    days: int = Field(
+        default=14, description="Number of recent days to analyze, default 14"
+    )
 
 
 @tool(args_schema=GetTrainingLoadInput)
@@ -194,7 +209,9 @@ def get_training_load(user_id: str, days: int = 14) -> str:
 
         change_pct = _calculate_change_pct(this_week_km, last_week_km)
         distribution = _calculate_intensity_distribution(runs)
-        injury_risk = "HIGH - weekly mileage increase exceeds 10%" if change_pct > 10 else "LOW"
+        injury_risk = (
+            "HIGH - weekly mileage increase exceeds 10%" if change_pct > 10 else "LOW"
+        )
 
         result: TrainingLoadPayload = {
             "user_id": user_id,
@@ -207,7 +224,8 @@ def get_training_load(user_id: str, days: int = 14) -> str:
             "injury_risk": injury_risk,
         }
         return json.dumps(result, ensure_ascii=False)
-    except Exception:
+    except Exception as e:
+        print(f"[tools] get_training_load error: {e}")
         data = _load_mock_data()
         summary = data.get("weekly_summary", {})
         fallback: TrainingLoadFallbackPayload = {
@@ -223,6 +241,7 @@ def get_training_load(user_id: str, days: int = 14) -> str:
 # ---------------------------------------------------------------------------
 # Tool 3 - get_race_history
 # ---------------------------------------------------------------------------
+
 
 class GetRaceHistoryInput(BaseModel):
     user_id: str = Field(description="Unique user identifier")
@@ -242,18 +261,22 @@ def get_race_history(user_id: str) -> str:
             "injury_history": data.get("injury_history", []),
         }
         return json.dumps(result, ensure_ascii=False)
-    except Exception:
-        fallback: RaceHistoryFallbackPayload = {
-            "user_id": user_id,
-            "personal_bests": {},
-            "note": "Race history unavailable due to data retrieval error",
-        }
-        return json.dumps(fallback, ensure_ascii=False)
+    except Exception as e:
+        print(f"[tools] get_race_history error: {e}")
+        return json.dumps(
+            {
+                "user_id": user_id,
+                "personal_bests": {},
+                "note": "Race history unavailable due to data retrieval error",
+            },
+            ensure_ascii=False,
+        )
 
 
 # ---------------------------------------------------------------------------
 # Tool 4 - search_knowledge (placeholder until Day 5-6 hybrid RAG)
 # ---------------------------------------------------------------------------
+
 
 class SearchKnowledgeInput(BaseModel):
     query: str = Field(description="Search query for the running knowledge base")

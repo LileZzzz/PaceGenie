@@ -1,8 +1,24 @@
-from dotenv import load_dotenv
-
-load_dotenv()
-
 from agent.graph import build_graph
+
+
+def print_messages(messages: list, query: str) -> None:
+    """Print all messages with clear role and tool_calls info."""
+    print("=" * 60)
+    print(f"Query: {query}")
+    print("=" * 60)
+    for i, msg in enumerate(messages):
+        role = getattr(msg, "type", "unknown")
+        content = getattr(msg, "content", "")
+        tool_calls = getattr(msg, "tool_calls", [])
+
+        print(f"\n--- message {i+1} [{role}] ---")
+        if tool_calls:
+            print(f"  tool_calls: {[t['name'] for t in tool_calls]}")
+        if content:
+            print(f"  content: {content[:300]}")
+        if not tool_calls and not content:
+            print("  (empty)")
+    print()
 
 
 def main() -> None:
@@ -21,16 +37,9 @@ def main() -> None:
         },
         config={"configurable": {"thread_id": "test-1"}},
     )
-
-    print("=" * 60)
-    print("Query: How is my recent training volume? Any injury risk?")
-    print("=" * 60)
-    for msg in first_result["messages"]:
-        role = getattr(msg, "type", "unknown")
-        content = getattr(msg, "content", str(msg))
-        if content:
-            print(f"[{role}] {content[:500]}")
-    print()
+    print_messages(
+        first_result["messages"], "How is my recent training volume? Any injury risk?"
+    )
 
     second_result = graph.invoke(
         {
@@ -44,15 +53,10 @@ def main() -> None:
         },
         config={"configurable": {"thread_id": "test-1"}},
     )
-
-    print("=" * 60)
-    print("Query: Can you build a one-week plan based on your previous advice?")
-    print("=" * 60)
-    for msg in second_result["messages"]:
-        role = getattr(msg, "type", "unknown")
-        content = getattr(msg, "content", str(msg))
-        if content:
-            print(f"[{role}] {content[:500]}")
+    print_messages(
+        second_result["messages"],
+        "Can you build a one-week plan based on your previous advice?",
+    )
 
 
 if __name__ == "__main__":

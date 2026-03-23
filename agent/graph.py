@@ -1,5 +1,7 @@
+from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 
 from agent.nodes import generate_response, reflect_on_answer, retrieve_context
@@ -7,21 +9,14 @@ from agent.state import AgentState
 from agent.tools import ALL_TOOLS
 
 _memory = MemorySaver()
-_graph: object | None = None
+_graph: CompiledStateGraph | None = None
 
 
 def _get_latest_assistant_text(state: AgentState) -> str:
-    """Read the latest assistant content across tuple and LangChain message formats."""
+    """Read the latest assistant content from LangChain message objects."""
     for message in reversed(state.get("messages", [])):
-        content = getattr(message, "content", None)
-        if content is not None:
-            return str(content)
-        if (
-            isinstance(message, tuple)
-            and len(message) == 2
-            and message[0] == "assistant"
-        ):
-            return str(message[1])
+        if isinstance(message, AIMessage):
+            return str(message.content)
     return ""
 
 
@@ -32,8 +27,7 @@ def _should_reflect(state: AgentState) -> str:
 
     latest_text = _get_latest_assistant_text(state)
     too_short = len(latest_text) < 100
-    no_numbers = not any(char.isdigit() for char in latest_text)
-    if too_short or no_numbers:
+    if too_short:
         return "reflect"
     return "end"
 
@@ -53,7 +47,7 @@ def route_after_generate(state: AgentState) -> str:
     return _should_reflect(state)
 
 
-def get_graph() -> object:
+def get_graph() -> CompiledStateGraph:
     """Return a singleton compiled graph to preserve memory and avoid rebuild overhead."""
     global _graph
     if _graph is not None:
@@ -87,6 +81,6 @@ def get_graph() -> object:
     return _graph
 
 
-def build_graph() -> object:
+def build_graph() -> CompiledStateGraph:
     """Keep backward compatibility while delegating to the singleton graph builder."""
     return get_graph()

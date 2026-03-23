@@ -25,33 +25,6 @@ class ReflectionUpdate(TypedDict):
     reflection_count: int
 
 
-def _get_latest_user_text(state: AgentState) -> str:
-    """Extract latest user text so fallback logic can remain deterministic without LLM calls."""
-    for message in reversed(state.get("messages", [])):
-        content = getattr(message, "content", None)
-        role = getattr(message, "type", None)
-        if role == "human" and content is not None:
-            return str(content)
-        if isinstance(message, tuple) and len(message) == 2 and message[0] == "user":
-            return str(message[1])
-    return ""
-
-
-def _build_training_volume_fallback(user_id: str, days: int = 14) -> str:
-    """Create a concrete fallback answer so coaching output still includes actionable numbers."""
-    try:
-        training_json = get_training_load.invoke({"user_id": user_id, "days": days})
-        return (
-            "I could not reach the LLM service, so here is a data-backed fallback summary: "
-            f"{training_json}"
-        )
-    except Exception:
-        return (
-            "I could not reach the LLM service. Keep weekly mileage increases under 10%, "
-            "prioritize one easy day after each quality session, and monitor recovery trends."
-        )
-
-
 def get_llm() -> ChatOpenAI:
     """Return a singleton LLM client so repeated node calls reuse one connection setup."""
     global _llm
@@ -102,19 +75,12 @@ def generate_response(state: AgentState) -> MessageUpdate:
         response = llm_with_tools.invoke(prompt_messages)
         return {"messages": [response]}
     except Exception as e:
-        print(f"LLM error: {e}")
-        latest_user_text = _get_latest_user_text(state).lower()
-        # NOTE: Route volume/risk queries to the workload tool even in fallback mode.
-        if any(keyword in latest_user_text for keyword in ("volume", "mileage", "injury", "risk", "load")):
-            fallback = _build_training_volume_fallback(user_id=user_id, days=14)
-        else:
-            fallback = (
-                "Based on your current goal to improve 5 km performance, start with 3 quality runs per week: "
-                "1 easy run, 1 threshold workout, and 1 long run. Keep at least 1 full rest day. "
-                "Increase weekly mileage by no more than 10%, track heart rate trends, and reassess every 2 weeks "
-                "using pace and recovery signals."
-            )
-        return {"messages": [AIMessage(content=fallback)]}
+        print(f"[nodes] LLM error: {e}")
+        return {
+            "messages": [
+                AIMessage(content="I'm temporarily unavailable. Please try again.")
+            ]
+        }
 
 
 def reflect_on_answer(state: AgentState) -> ReflectionUpdate:
