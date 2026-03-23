@@ -8,6 +8,7 @@ from langchain_openai import ChatOpenAI
 
 from agent.state import AgentState
 from agent.tools import ALL_TOOLS, get_training_load
+from rag.retriever import get_retriever
 
 _llm: ChatOpenAI | None = None
 
@@ -47,10 +48,40 @@ def get_llm() -> ChatOpenAI:
     return _llm
 
 
+def _extract_last_user_query(state: AgentState) -> str:
+    """Pull the most recent HumanMessage text to use as the retrieval query.
+
+    Using the last user message (not a summary) keeps retrieval grounded in
+    exactly what the user just asked, avoiding drift from earlier turns.
+    """
+    for msg in reversed(state.get("messages", [])):
+        if isinstance(msg, HumanMessage):
+            return str(msg.content)
+        # LangGraph also accepts (role, content) tuples at graph.invoke time.
+        if isinstance(msg, tuple) and msg[0] == "user":
+            return str(msg[1])
+    return ""
+
+
 def retrieve_context(state: AgentState) -> RetrieveContextUpdate:
-    """Provide stable fallback context so responses remain deterministic before RAG is ready."""
-    _ = state
-    return {"retrieved_context": "No relevant knowledge base content is available yet."}
+    """Pre-fetch knowledge-base context before the LLM generates a response.
+
+    Running retrieval as a dedicated node keeps generate_response focused on
+    reasoning, and lets us swap retrieval strategies without touching LLM logic.
+    """
+    query = _extract_last_user_query(state)
+    if not query:
+        return {"retrieved_context": "No user query found."}
+
+    try:
+        chunks = get_retriever().hybrid_search(query, top_k=3)
+        if not chunks:
+            return {"retrieved_context": "No relevant knowledge found."}
+        lines = "\n".join(f"{i + 1}. {chunk}" for i, chunk in enumerate(chunks))
+        return {"retrieved_context": f"Related knowledge:\n{lines}"}
+    except Exception as e:
+        print(f"[nodes] retrieve_context error: {e}")
+        return {"retrieved_context": "Knowledge base temporarily unavailable."}
 
 
 def generate_response(state: AgentState) -> MessageUpdate:

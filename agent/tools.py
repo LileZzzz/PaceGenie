@@ -7,6 +7,7 @@ from typing import TypedDict
 
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
+from rag.retriever import get_retriever
 
 MOCK_DATA_PATH = Path(__file__).parent.parent / "data" / "mock_garmin.json"
 
@@ -61,24 +62,10 @@ class TrainingLoadPayload(TypedDict):
     injury_risk: str
 
 
-class TrainingLoadFallbackPayload(TypedDict):
-    user_id: str
-    this_week_km: float | None
-    last_week_km: float | None
-    four_week_avg_km: float | None
-    note: str
-
-
 class RaceHistoryPayload(TypedDict):
     user_id: str
     personal_bests: dict[str, float]
     injury_history: list[str]
-
-
-class RaceHistoryFallbackPayload(TypedDict):
-    user_id: str
-    personal_bests: dict[str, float]
-    note: str
 
 
 def _load_mock_data() -> MockGarminData:
@@ -150,9 +137,10 @@ class GetRecentRunsInput(BaseModel):
 
 @tool(args_schema=GetRecentRunsInput)
 def get_recent_runs(user_id: str, days: int = 7) -> str:
-    """Return the user's most recent running sessions as JSON.
+    """Return raw per-session run records (distance, pace, heart rate) for the last N days.
 
-    Call this when the user asks about recent training volume or details over the last N days (e.g., pace/HR).
+    Call this when the user asks to list or review individual runs, e.g. 'show my last 5 runs'
+    or 'what did I run on Monday' -- not for trend analysis or injury risk assessment.
     """
     try:
         data = _load_mock_data()
@@ -165,13 +153,7 @@ def get_recent_runs(user_id: str, days: int = 7) -> str:
         return json.dumps(payload, ensure_ascii=False)
     except Exception as e:
         print(f"[tools] get_recent_runs error: {e}")
-        data = _load_mock_data()
-        payload: RecentRunsPayload = {
-            "user_id": user_id,
-            "runs": data.get("recent_runs", []),
-            "days": max(days, 1),
-        }
-        return json.dumps(payload, ensure_ascii=False)
+        return json.dumps({"user_id": user_id, "runs": [], "days": days})
 
 
 # ---------------------------------------------------------------------------
@@ -188,9 +170,10 @@ class GetTrainingLoadInput(BaseModel):
 
 @tool(args_schema=GetTrainingLoadInput)
 def get_training_load(user_id: str, days: int = 14) -> str:
-    """Compute training load metrics for the past N days (mileage trend, intensity mix, injury risk).
+    """Compute aggregated training load: total km, week-over-week mileage change, intensity mix, and injury risk score.
 
-    Call this when the user asks about weekly mileage/volume changes, training load, or injury risk.
+    Call this when the user asks about training volume trends, whether mileage is increasing too fast,
+    overall training load, or injury risk -- not for listing individual run sessions.
     """
     try:
         data = _load_mock_data()
@@ -226,16 +209,7 @@ def get_training_load(user_id: str, days: int = 14) -> str:
         return json.dumps(result, ensure_ascii=False)
     except Exception as e:
         print(f"[tools] get_training_load error: {e}")
-        data = _load_mock_data()
-        summary = data.get("weekly_summary", {})
-        fallback: TrainingLoadFallbackPayload = {
-            "user_id": user_id,
-            "this_week_km": summary.get("this_week_km"),
-            "last_week_km": summary.get("last_week_km"),
-            "four_week_avg_km": summary.get("4_week_avg_km"),
-            "note": "Returned cached weekly summary due to data retrieval error",
-        }
-        return json.dumps(fallback, ensure_ascii=False)
+        return json.dumps({"user_id": user_id, "total_km": 0.0, "period_days": days})
 
 
 # ---------------------------------------------------------------------------
@@ -263,33 +237,38 @@ def get_race_history(user_id: str) -> str:
         return json.dumps(result, ensure_ascii=False)
     except Exception as e:
         print(f"[tools] get_race_history error: {e}")
-        return json.dumps(
-            {
-                "user_id": user_id,
-                "personal_bests": {},
-                "note": "Race history unavailable due to data retrieval error",
-            },
-            ensure_ascii=False,
-        )
+        return json.dumps({"user_id": user_id, "personal_bests": {}, "injury_history": []})
 
 
 # ---------------------------------------------------------------------------
-# Tool 4 - search_knowledge (placeholder until Day 5-6 hybrid RAG)
+# Tool 4 - search_knowledge (hybrid vector + BM25 via pgvector)
 # ---------------------------------------------------------------------------
 
 
 class SearchKnowledgeInput(BaseModel):
     query: str = Field(description="Search query for the running knowledge base")
+    top_k: int = Field(default=3, description="Number of results to return, default 3")
 
 
 @tool(args_schema=SearchKnowledgeInput)
-def search_knowledge(query: str) -> str:
-    """Search the running knowledge base for training principles and safety guidance.
+def search_knowledge(query: str, top_k: int = 3) -> str:
+    """Search the running knowledge base using hybrid vector + BM25 retrieval and return ranked chunks with source.
 
-    Call this when the user asks for coaching advice that should be grounded in the knowledge base (training principles, pace zones, injury prevention).
+    Call this when the user asks for coaching advice grounded in running science:
+    training principles, pace zones, injury prevention, or race preparation.
     """
-    _ = query
-    return "Knowledge base search is under development. Please check back later."
+    try:
+        results = get_retriever().search(query, top_k=top_k)
+        if not results:
+            return json.dumps([])
+        payload = [
+            {"source": r["source"], "content": r["content"], "score": r["score"]}
+            for r in results
+        ]
+        return json.dumps(payload, ensure_ascii=False)
+    except Exception as e:
+        print(f"[tools] search_knowledge error: {e}")
+        return json.dumps([])
 
 
 ALL_TOOLS = [get_recent_runs, get_training_load, get_race_history, search_knowledge]

@@ -1,0 +1,182 @@
+[
+  {
+    "id": "q001",
+    "query": "what is lactate threshold and tempo pace",
+    "relevant_chunk_ids": ["pace_zones.md:3", "pace_zones.md:2"],
+    "category": "pace_zone"
+  },
+  {
+    "id": "q002",
+    "query": "easy pace heart rate zone for aerobic base",
+    "relevant_chunk_ids": ["pace_zones.md:1", "pace_zones.md:6"],
+    "category": "pace_zone"
+  },
+  {
+    "id": "q003",
+    "query": "interval training VO2max workout",
+    "relevant_chunk_ids": ["pace_zones.md:4", "pace_zones.md:3"],
+    "category": "pace_zone"
+  },
+  {
+    "id": "q011",
+    "query": "LT2 lactate clearance comfortably hard",
+    "relevant_chunk_ids": ["pace_zones.md:3"],
+    "category": "pace_zone"
+  },
+  {
+    "id": "q012",
+    "query": "Zone 1-2 conversational effort recovery run",
+    "relevant_chunk_ids": ["pace_zones.md:1", "pace_zones.md:6"],
+    "category": "pace_zone"
+  },
+  {
+    "id": "q013",
+    "query": "800m 1000m repeats high intensity interval",
+    "relevant_chunk_ids": ["pace_zones.md:4"],
+    "category": "pace_zone"
+  },
+  {
+    "id": "q014",
+    "query": "200m 400m strides neuromuscular coordination speed",
+    "relevant_chunk_ids": ["pace_zones.md:5"],
+    "category": "pace_zone"
+  },
+  {
+    "id": "q015",
+    "query": "max HR 192 BPM zone boundaries table",
+    "relevant_chunk_ids": ["pace_zones.md:6"],
+    "category": "pace_zone"
+  },
+  {
+    "id": "q016",
+    "query": "marathon race pace M pace long run effort",
+    "relevant_chunk_ids": ["pace_zones.md:2"],
+    "category": "pace_zone"
+  },
+  {
+    "id": "q017",
+    "query": "R pace repetition all-out speed short repeats",
+    "relevant_chunk_ids": ["pace_zones.md:5"],
+    "category": "pace_zone"
+  },
+  {
+    "id": "q004",
+    "query": "runner's knee patellofemoral pain cause prevention",
+    "relevant_chunk_ids": ["injury_prevention.md:2", "injury_prevention.md:3"],
+    "category": "injury"
+  },
+  {
+    "id": "q005",
+    "query": "achilles tendon pain stiffness running",
+    "relevant_chunk_ids": ["injury_prevention.md:4", "injury_prevention.md:5"],
+    "category": "injury"
+  },
+  {
+    "id": "q006",
+    "query": "IT band syndrome outside knee pain",
+    "relevant_chunk_ids": ["injury_prevention.md:6", "injury_prevention.md:7"],
+    "category": "injury"
+  },
+  {
+    "id": "q018",
+    "query": "glute hip abductor strength training injury reduction",
+    "relevant_chunk_ids": ["injury_prevention.md:8", "injury_prevention.md:9"],
+    "category": "injury"
+  },
+  {
+    "id": "q019",
+    "query": "when to see doctor sharp localized swelling running pain",
+    "relevant_chunk_ids": ["injury_prevention.md:11"],
+    "category": "injury"
+  },
+  {
+    "id": "q007",
+    "query": "80 20 rule polarized training easy runs",
+    "relevant_chunk_ids": ["training_principles.md:2", "training_principles.md:4"],
+    "category": "training_method"
+  },
+  {
+    "id": "q008",
+    "query": "10 percent weekly mileage increase rule",
+    "relevant_chunk_ids": ["training_principles.md:7", "training_principles.md:3"],
+    "category": "training_method"
+  },
+  {
+    "id": "q020",
+    "query": "Stephen Seiler 80 percent low intensity research",
+    "relevant_chunk_ids": ["training_principles.md:2", "training_principles.md:3"],
+    "category": "training_method"
+  },
+  {
+    "id": "q021",
+    "query": "progressive overload volume before intensity principle",
+    "relevant_chunk_ids": ["training_principles.md:5", "training_principles.md:6"],
+    "category": "training_method"
+  },
+  {
+    "id": "q022",
+    "query": "how often should I run hard workouts per week",
+    "relevant_chunk_ids": ["training_principles.md:2", "training_principles.md:4"],
+    "category": "training_method"
+  },
+  {
+    "id": "q023",
+    "query": "recovery adaptation rest day sleep importance",
+    "relevant_chunk_ids": ["training_principles.md:8", "training_principles.md:9"],
+    "category": "training_method"
+  },
+  {
+    "id": "q024",
+    "query": "deload week 30 percent volume reduction every 4 weeks",
+    "relevant_chunk_ids": ["training_principles.md:8", "training_principles.md:9"],
+    "category": "training_method"
+  },
+  {
+    "id": "q025",
+    "query": "resting heart rate elevated 5 bpm overtraining sign",
+    "relevant_chunk_ids": ["training_principles.md:8"],
+    "category": "training_method"
+  },
+  {
+    "id": "q026",
+    "query": "connective tissue tendon adapts slower than cardio fitness",
+    "relevant_chunk_ids": ["training_principles.md:7"],
+    "category": "training_method"
+  },
+  {
+    "id": "q027",
+    "query": "add frequency only after current schedule feels manageable",
+    "relevant_chunk_ids": ["training_principles.md:5", "training_principles.md:6"],
+    "category": "training_method"
+  },
+  {
+    "id": "q009",
+    "query": "half marathon taper week before race",
+    "relevant_chunk_ids": ["race_preparation.md:3", "race_preparation.md:4"],
+    "category": "race_prep"
+  },
+  {
+    "id": "q010",
+    "query": "race day nutrition gel hydration strategy",
+    "relevant_chunk_ids": ["race_preparation.md:6", "race_preparation.md:7"],
+    "category": "race_prep"
+  },
+  {
+    "id": "q028",
+    "query": "12 week half marathon base build quality peak taper phases",
+    "relevant_chunk_ids": ["race_preparation.md:1", "race_preparation.md:2"],
+    "category": "race_prep"
+  },
+  {
+    "id": "q029",
+    "query": "negative split going out too fast race mistake",
+    "relevant_chunk_ids": ["race_preparation.md:5"],
+    "category": "race_prep"
+  },
+  {
+    "id": "q030",
+    "query": "carbohydrate loading glycogen supercompensation pre race",
+    "relevant_chunk_ids": ["race_preparation.md:4"],
+    "category": "race_prep"
+  }
+]
