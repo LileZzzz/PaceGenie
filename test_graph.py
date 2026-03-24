@@ -1,9 +1,10 @@
-"""End-to-end test script for the PaceGenie agent.
+"""End-to-end integration test for PaceGenie agent.
 
-Covers three routing paths:
-  1. Garmin tool path  -- get_training_load is called for volume questions
-  2. RAG tool path     -- search_knowledge is called for coaching/knowledge questions
-  3. Memory path       -- second turn references context from the first turn
+Tests four capability areas:
+  1. Garmin tool path     -- get_training_load / get_recent_runs called correctly
+  2. RAG tool path        -- search_knowledge called for coaching questions
+  3. Memory across turns  -- second turn references first-turn context
+  4. 10-question suite    -- broad coverage; records which questions trigger Reflection
 
 Run:  uv run python test_graph.py
 """
@@ -14,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from agent.graph import build_graph
 
@@ -87,13 +88,34 @@ def _assert_final_answer_contains(messages: list, keyword: str, label: str) -> N
         print(f"         answer preview: {answer}")
 
 
+def _count_reflections(messages: list) -> int:
+    """Count how many reflection prompts were injected in this invoke result.
+
+    Reflection prompts are HumanMessages added by reflect_on_answer that contain
+    'Please call the relevant training data tools'.
+    """
+    return sum(
+        1
+        for msg in messages
+        if isinstance(msg, HumanMessage)
+        and "Please call the relevant training data tools" in str(msg.content)
+    )
+
+
+def _final_answer(messages: list) -> str:
+    """Return the last non-empty AIMessage content."""
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage) and msg.content:
+            return str(msg.content)
+    return "(no answer)"
+
+
 def _invoke(graph, query: str, thread_id: str) -> list:
     """Invoke the graph and return the full messages list."""
     result = graph.invoke(
         {
             "messages": [("user", query)],
             "user_id": "demo_user",
-            "garmin_data": None,
             "retrieved_context": None,
             "reflection_count": 0,
         },
@@ -103,7 +125,7 @@ def _invoke(graph, query: str, thread_id: str) -> list:
 
 
 # ---------------------------------------------------------------------------
-# Test cases
+# Task 1 & 2 -- Tool routing smoke tests
 # ---------------------------------------------------------------------------
 
 
@@ -131,45 +153,178 @@ def test_rag_tool_path(graph) -> None:
     _assert_final_answer_contains(messages, "rest", "answer mentions rest")
 
 
-def test_threshold_training_rag(graph) -> None:
-    """Agent should retrieve pace_zones.md content for threshold training questions."""
-    query = "Explain threshold training and when I should do tempo runs."
-    messages = _invoke(graph, query, thread_id="test-threshold")
-    _print_messages(messages, query)
-
-    print("\n  --- assertions ---")
-    _assert_tool_called(messages, "search_knowledge", "rag tool called")
-    _assert_tool_result_contains(messages, "pace_zones", "pace zones doc retrieved")
-    _assert_final_answer_contains(messages, "threshold", "answer mentions threshold")
+# ---------------------------------------------------------------------------
+# Task 3 -- Memory across turns (Chinese queries)
+# ---------------------------------------------------------------------------
 
 
 def test_memory_across_turns(graph) -> None:
-    """Second turn should reference context established in the first turn."""
-    thread = "test-memory"
+    """Second turn should reference the volume data established in the first turn.
 
-    q1 = "How is my recent training volume?"
+    Uses a fresh thread so previous test state does not pollute memory.
+    """
+    thread = "test-memory-zh"
+
+    q1 = "What was my weekly running volume recently?"
     messages1 = _invoke(graph, q1, thread_id=thread)
     _print_messages(messages1, f"Turn 1: {q1}")
 
-    q2 = "Based on my volume, what pace zone should my easy runs be in?"
+    q2 = "How does that compare to the previous week?"
     messages2 = _invoke(graph, q2, thread_id=thread)
     _print_messages(messages2, f"Turn 2: {q2}")
 
     print("\n  --- assertions ---")
-    _assert_tool_called(
-        messages1, "get_training_load", "turn 1 calls training load tool"
-    )
-    # Turn 2 may call search_knowledge to look up pace zones
+    _assert_tool_called(messages1, "get_training_load", "Turn 1 calls training load")
+
+    # Turn 2 should reference data; check final answer contains a number
+    answer2 = _final_answer(messages2)
+    has_number = any(c.isdigit() for c in answer2)
+    if has_number:
+        print("  [PASS] 'memory': Turn 2 answer contains numeric data")
+    else:
+        print("  [FAIL] 'memory': Turn 2 answer has no numbers (memory may be broken)")
+        print(f"         preview: {answer2[:200]}")
+
     called_t2 = [
         t["name"]
         for msg in messages2
         if isinstance(msg, AIMessage)
         for t in getattr(msg, "tool_calls", [])
     ]
-    if called_t2:
-        print(f"  [INFO] Turn 2 called: {called_t2}")
+    print(f"  [INFO] Turn 2 tools called: {called_t2 or '(none -- answered from memory)'}")
+
+
+# ---------------------------------------------------------------------------
+# Task 4 -- 10-question integration suite with Reflection tracking
+# ---------------------------------------------------------------------------
+
+# (question, thread_id, expected_tool, expected_keyword_in_answer)
+INTEGRATION_QUESTIONS: list[tuple[str, str, str | None, str | None]] = [
+    (
+        "What is my total running volume over the last 7 days in km?",
+        "q01",
+        "get_training_load",
+        "km",
+    ),
+    (
+        "Show me my last 5 runs with distance and pace for each.",
+        "q02",
+        "get_recent_runs",
+        "km",
+    ),
+    (
+        "Has my weekly mileage increased by more than 10%? Am I at injury risk?",
+        "q03",
+        "get_training_load",
+        "km",
+    ),
+    (
+        "What is Easy pace (E pace) and how slow should I run?",
+        "q04",
+        "search_knowledge",
+        "pace",
+    ),
+    (
+        "What is lactate threshold training and when should I do tempo runs (T pace)?",
+        "q05",
+        "search_knowledge",
+        "threshold",
+    ),
+    (
+        "How do I prevent and treat runner's knee?",
+        "q06",
+        "search_knowledge",
+        "knee",
+    ),
+    (
+        "I am preparing for a half marathon. How should I taper in the final week?",
+        "q07",
+        "search_knowledge",
+        "race",
+    ),
+    (
+        "What races have I run in the past and what was my best finishing time?",
+        "q08",
+        "get_race_history",
+        "time",
+    ),
+    (
+        "Based on my current training load, which pace zone should most of my runs be in?",
+        "q09",
+        "get_training_load",
+        None,
+    ),
+    (
+        "What causes iliotibial band syndrome (ITBS) and how do I recover from it?",
+        "q10",
+        "search_knowledge",
+        "itbs",
+    ),
+]
+
+
+def test_integration_suite(graph) -> None:
+    """Run 10 questions, check tool routing and answer quality, track reflections."""
+    total = len(INTEGRATION_QUESTIONS)
+    passed = 0
+    reflection_triggers: list[str] = []
+
+    print(f"\n{SEPARATOR}")
+    print(f"10-QUESTION INTEGRATION SUITE  ({total} questions)")
+    print(SEPARATOR)
+
+    for q, thread_id, expected_tool, expected_keyword in INTEGRATION_QUESTIONS:
+        messages = _invoke(graph, q, thread_id=thread_id)
+        ref_count = _count_reflections(messages)
+        answer = _final_answer(messages)
+        has_numbers = any(c.isdigit() for c in answer)
+
+        # Tool routing check
+        tool_ok = True
+        if expected_tool:
+            called = [
+                t["name"]
+                for msg in messages
+                if isinstance(msg, AIMessage)
+                for t in getattr(msg, "tool_calls", [])
+            ]
+            tool_ok = expected_tool in called
+
+        # Keyword check
+        keyword_ok = True
+        if expected_keyword:
+            keyword_ok = expected_keyword.lower() in answer.lower()
+
+        ok = tool_ok and keyword_ok and has_numbers
+        status = "[PASS]" if ok else "[FAIL]"
+        if ok:
+            passed += 1
+        if ref_count > 0:
+            reflection_triggers.append(thread_id)
+
+        print(
+            f"\n  {status} {thread_id}: {q[:50]}"
+            f"\n          tool={'OK' if tool_ok else 'MISS'} ({expected_tool})"
+            f"  keyword={'OK' if keyword_ok else 'MISS'} ({expected_keyword})"
+            f"  numbers={'YES' if has_numbers else 'NO'}"
+            f"  reflections={ref_count}"
+        )
+        if not ok:
+            print(f"          answer preview: {answer[:150]}")
+
+    print(f"\n  --- Summary ---")
+    print(f"  Passed         : {passed}/{total}")
+    print(f"  Reflections triggered : {len(reflection_triggers)} questions -> {reflection_triggers}")
+
+    if passed >= 9:
+        print("  [PASS] Acceptance criterion met: >=9/10 correct")
     else:
-        print("  [INFO] Turn 2 answered from memory (no tool call)")
+        print(f"  [FAIL] Acceptance criterion not met: need 9/10, got {passed}/10")
+
+    if len(reflection_triggers) >= 3:
+        print("  [PASS] Reflection triggered >=3 times")
+    else:
+        print(f"  [WARN] Reflection triggered only {len(reflection_triggers)} time(s) (target: >=3)")
 
 
 # ---------------------------------------------------------------------------
@@ -181,14 +336,19 @@ def main() -> None:
     """Run all test cases and print a summary."""
     graph = build_graph()
 
-    print("\n" + "=" * 60)
+    print("\n" + SEPARATOR)
     print("PaceGenie Agent Test Suite")
-    print("=" * 60)
+    print(SEPARATOR)
 
+    print("\n>>> Task 1-2: Tool routing smoke tests")
     test_garmin_tool_path(graph)
     test_rag_tool_path(graph)
-    test_threshold_training_rag(graph)
+
+    print("\n>>> Task 3: Memory across turns")
     test_memory_across_turns(graph)
+
+    print("\n>>> Task 4: 10-question integration suite")
+    test_integration_suite(graph)
 
     print(f"\n{SEPARATOR}")
     print("Done. Check [PASS] / [FAIL] lines above.")

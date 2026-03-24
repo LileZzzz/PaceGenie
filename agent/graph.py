@@ -21,13 +21,19 @@ def _get_latest_assistant_text(state: AgentState) -> str:
 
 
 def _should_reflect(state: AgentState) -> str:
-    """Decide whether the answer needs a reflection pass."""
+    """Decide whether the answer needs a reflection pass.
+
+    Triggers reflection when (too_short OR no_numbers) AND budget remains.
+    Checking both conditions catches vague answers that are long but data-free.
+    """
     if state.get("reflection_count", 0) >= 2:
         return "end"
 
     latest_text = _get_latest_assistant_text(state)
     too_short = len(latest_text) < 100
-    if too_short:
+    no_numbers = not any(c.isdigit() for c in latest_text)
+
+    if too_short or no_numbers:
         return "reflect"
     return "end"
 

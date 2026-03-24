@@ -94,10 +94,19 @@ def _filter_runs_by_days(runs: list[RunRecord], days: int) -> list[RunRecord]:
 def _split_runs_by_week(
     runs: list[RunRecord],
 ) -> tuple[list[RunRecord], list[RunRecord]]:
-    """Split runs into this-week and last-week buckets for volume trend analysis."""
-    cutoff = datetime.now() - timedelta(days=7)
-    this_week_runs = [run for run in runs if _parse_iso_date(run["date"]) >= cutoff]
-    last_week_runs = [run for run in runs if _parse_iso_date(run["date"]) < cutoff]
+    """Split runs into this-week (last 7 days) and last-week (7-14 days ago) buckets.
+
+    Capping last_week at the 7-14 day window prevents older runs from inflating the
+    'last week' total when the caller requests a 21- or 30-day window.
+    """
+    now = datetime.now()
+    week_start = now - timedelta(days=7)
+    two_weeks_ago = now - timedelta(days=14)
+    this_week_runs = [run for run in runs if _parse_iso_date(run["date"]) >= week_start]
+    last_week_runs = [
+        run for run in runs
+        if two_weeks_ago <= _parse_iso_date(run["date"]) < week_start
+    ]
     return this_week_runs, last_week_runs
 
 

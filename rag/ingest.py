@@ -1,8 +1,9 @@
 """Script for loading knowledge-base Markdown files into pgvector.
 
-Run directly:  python rag/ingest.py
+Run directly:  python -m rag.ingest
 The script reads all .md files from data/knowledge/, splits each into chunks,
-embeds them via OpenAI, and stores the results in the knowledge_chunks table.
+embeds them via Google Gemini (gemini-embedding-2-preview), and stores the
+results in the knowledge_chunks table.
 A quick search test at the end verifies that retrieval is working.
 """
 

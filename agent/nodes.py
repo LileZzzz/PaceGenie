@@ -90,10 +90,18 @@ def generate_response(state: AgentState) -> MessageUpdate:
 
     system_prompt = (
         "You are PaceGenie, a professional AI running coach. "
-        "Provide personalized guidance based on the user's Garmin training data and running knowledge. "
-        "Always use the available tools to fetch real training data before giving advice. "
-        "Include concrete numbers (distances, paces, heart rates) in your answers. "
-        f"The current user_id is: {user_id}"
+        "You MUST follow these two rules on EVERY response:\n\n"
+        "RULE 1 — Training data questions: If the user asks about their own runs, "
+        "mileage, pace, heart rate, injury risk, or race history, you MUST call the "
+        "appropriate Garmin tool (get_training_load, get_recent_runs, get_race_history) "
+        "to fetch real data. Never guess or fabricate numbers.\n\n"
+        "RULE 2 — Knowledge questions: If the user asks about running coaching topics "
+        "(pace zones, E/M/T/I/R pace, threshold training, injury prevention, ITBS, "
+        "runner's knee, race preparation, taper, 80/20 rule, etc.) you MUST call "
+        "search_knowledge to retrieve from the knowledge base. "
+        "Do NOT answer from your own internal knowledge — always use the tool.\n\n"
+        "Always include concrete numbers in your final answer. "
+        f"Current user_id: {user_id}"
     )
 
     prompt_messages = [
@@ -115,15 +123,38 @@ def generate_response(state: AgentState) -> MessageUpdate:
 
 
 def reflect_on_answer(state: AgentState) -> ReflectionUpdate:
-    """Inject a reflection prompt to improve answer specificity within a bounded retry budget."""
+    """Inject a targeted self-criticism prompt based on which quality gate failed.
+
+    Checking conditions here (not relying on graph routing flags) keeps the node
+    self-contained and makes the critique specific enough for the LLM to act on.
+    """
+    latest_text = ""
+    for msg in reversed(state.get("messages", [])):
+        if isinstance(msg, AIMessage) and msg.content:
+            latest_text = str(msg.content)
+            break
+
+    too_short = len(latest_text) < 100
+    no_numbers = not any(c.isdigit() for c in latest_text)
+
+    issues: list[str] = []
+    if too_short:
+        issues.append("Your previous answer was too brief (under 100 characters).")
+    if no_numbers:
+        issues.append(
+            "Your previous answer did not cite any concrete numbers from the user's "
+            "training data. You must include actual mileage (km), pace (min/km), "
+            "and heart rate (bpm) figures pulled from the training tools."
+        )
+
+    critique = " ".join(issues)
+    prompt = (
+        f"{critique} "
+        "Please call the relevant training data tools first, then give a detailed "
+        "answer with specific numbers."
+    )
+
     return {
-        "messages": [
-            HumanMessage(
-                content=(
-                    "Please answer again and include my concrete training data, "
-                    "including specific numbers."
-                )
-            )
-        ],
+        "messages": [HumanMessage(content=prompt)],
         "reflection_count": state.get("reflection_count", 0) + 1,
     }
