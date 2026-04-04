@@ -6,18 +6,12 @@ Tests four capability areas:
   3. Memory across turns  -- second turn references first-turn context
   4. 10-question suite    -- broad coverage; records which questions trigger Reflection
 
-Run:  uv run python test_graph.py
+Run:  uv run pytest tests/test_graph.py -v
 """
 
 from __future__ import annotations
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-
-from agent.graph import build_graph
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -154,16 +148,13 @@ def test_rag_tool_path(graph) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task 3 -- Memory across turns (Chinese queries)
+# Task 3 -- Memory across turns
 # ---------------------------------------------------------------------------
 
 
 def test_memory_across_turns(graph) -> None:
-    """Second turn should reference the volume data established in the first turn.
-
-    Uses a fresh thread so previous test state does not pollute memory.
-    """
-    thread = "test-memory-zh"
+    """Second turn should reference the volume data established in the first turn."""
+    thread = "test-memory"
 
     q1 = "What was my weekly running volume recently?"
     messages1 = _invoke(graph, q1, thread_id=thread)
@@ -176,7 +167,6 @@ def test_memory_across_turns(graph) -> None:
     print("\n  --- assertions ---")
     _assert_tool_called(messages1, "get_training_load", "Turn 1 calls training load")
 
-    # Turn 2 should reference data; check final answer contains a number
     answer2 = _final_answer(messages2)
     has_number = any(c.isdigit() for c in answer2)
     if has_number:
@@ -279,7 +269,6 @@ def test_integration_suite(graph) -> None:
         answer = _final_answer(messages)
         has_numbers = any(c.isdigit() for c in answer)
 
-        # Tool routing check
         tool_ok = True
         if expected_tool:
             called = [
@@ -290,7 +279,6 @@ def test_integration_suite(graph) -> None:
             ]
             tool_ok = expected_tool in called
 
-        # Keyword check
         keyword_ok = True
         if expected_keyword:
             keyword_ok = expected_keyword.lower() in answer.lower()
@@ -316,44 +304,5 @@ def test_integration_suite(graph) -> None:
     print(f"  Passed         : {passed}/{total}")
     print(f"  Reflections triggered : {len(reflection_triggers)} questions -> {reflection_triggers}")
 
-    if passed >= 9:
-        print("  [PASS] Acceptance criterion met: >=9/10 correct")
-    else:
-        print(f"  [FAIL] Acceptance criterion not met: need 9/10, got {passed}/10")
-
-    if len(reflection_triggers) >= 3:
-        print("  [PASS] Reflection triggered >=3 times")
-    else:
-        print(f"  [WARN] Reflection triggered only {len(reflection_triggers)} time(s) (target: >=3)")
-
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
-
-def main() -> None:
-    """Run all test cases and print a summary."""
-    graph = build_graph()
-
-    print("\n" + SEPARATOR)
-    print("PaceGenie Agent Test Suite")
-    print(SEPARATOR)
-
-    print("\n>>> Task 1-2: Tool routing smoke tests")
-    test_garmin_tool_path(graph)
-    test_rag_tool_path(graph)
-
-    print("\n>>> Task 3: Memory across turns")
-    test_memory_across_turns(graph)
-
-    print("\n>>> Task 4: 10-question integration suite")
-    test_integration_suite(graph)
-
-    print(f"\n{SEPARATOR}")
-    print("Done. Check [PASS] / [FAIL] lines above.")
-    print(SEPARATOR)
-
-
-if __name__ == "__main__":
-    main()
+    assert passed >= 9, f"Acceptance criterion not met: need 9/10, got {passed}/10"
+    print("  [PASS] Acceptance criterion met: >=9/10 correct")

@@ -8,14 +8,10 @@ Evaluation checklist (assessed manually after running):
   [ ] Answer length > 150 characters
   [ ] References injury_history or personal_bests where relevant
 
-Run:  uv run python test_mock_quality.py
+Run:  uv run pytest tests/test_mock_quality.py -v -s
 """
 
 from __future__ import annotations
-
-from dotenv import load_dotenv
-
-load_dotenv()
 
 import json
 from pathlib import Path
@@ -28,7 +24,7 @@ from agent.graph import get_graph
 # Config
 # ---------------------------------------------------------------------------
 
-MOCK_DATA_PATH = Path(__file__).parent / "data" / "mock_garmin.json"
+MOCK_DATA_PATH = Path(__file__).parent.parent / "data" / "mock_garmin.json"
 SEPARATOR = "=" * 70
 
 QUESTIONS: list[tuple[str, str]] = [
@@ -103,12 +99,20 @@ def _quality_flags(answer: str) -> dict[str, bool]:
 
 
 # ---------------------------------------------------------------------------
-# Main runner
+# Tests
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
-    """Invoke the agent with 5 quality-test questions and print full answers."""
+def test_mock_data_present() -> None:
+    """Verify mock Garmin data file exists and has runs."""
+    data = _load_garmin_data()
+    assert "recent_runs" in data, "mock_garmin.json missing recent_runs"
+    assert len(data["recent_runs"]) >= 16, "Expected at least 16 runs in mock data"
+    print(f"\nGarmin data loaded: {len(data['recent_runs'])} runs")
+
+
+def test_quality_suite() -> None:
+    """Run 5 quality-test questions and check all produce data-grounded answers."""
     graph = get_graph()
     garmin_data = _load_garmin_data()
 
@@ -116,6 +120,8 @@ def main() -> None:
     print("PaceGenie Mock Data Quality Validation")
     print(f"Garmin data loaded: {len(garmin_data.get('recent_runs', []))} runs")
     print(SEPARATOR)
+
+    all_ok = True
 
     for thread_id, question in QUESTIONS:
         print(f"\n{SEPARATOR}")
@@ -148,10 +154,7 @@ def main() -> None:
             mark = "[OK]" if ok else "[--]"
             print(f"  {mark} {flag}")
 
-    print(f"\n{SEPARATOR}")
-    print("Done. Review each answer above manually.")
-    print(SEPARATOR)
+        if not flags["has_numbers"] or not flags["length_ok"]:
+            all_ok = False
 
-
-if __name__ == "__main__":
-    main()
+    assert all_ok, "One or more answers failed basic quality checks (no numbers or too short)"

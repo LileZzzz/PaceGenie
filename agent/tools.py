@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TypedDict
@@ -8,6 +9,8 @@ from typing import TypedDict
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from rag.retriever import get_retriever
+
+logger = logging.getLogger(__name__)
 
 MOCK_DATA_PATH = Path(__file__).parent.parent / "data" / "mock_garmin.json"
 
@@ -68,11 +71,16 @@ class RaceHistoryPayload(TypedDict):
     injury_history: list[str]
 
 
+_mock_data_cache: MockGarminData | None = None
+
+
 def _load_mock_data() -> MockGarminData:
-    """Read mock Garmin data so tools can return deterministic fallback results."""
-    with open(MOCK_DATA_PATH, "r", encoding="utf-8") as file:
-        raw_data = json.load(file)
-    return raw_data
+    """Return cached mock Garmin data, loading from disk only on first call."""
+    global _mock_data_cache
+    if _mock_data_cache is None:
+        with open(MOCK_DATA_PATH, "r", encoding="utf-8") as file:
+            _mock_data_cache = json.load(file)
+    return _mock_data_cache
 
 
 def _parse_iso_date(date_text: str) -> datetime:
@@ -161,7 +169,7 @@ def get_recent_runs(user_id: str, days: int = 7) -> str:
         }
         return json.dumps(payload, ensure_ascii=False)
     except Exception as e:
-        print(f"[tools] get_recent_runs error: {e}")
+        logger.exception("[tools] get_recent_runs error: %s", e)
         return json.dumps({"user_id": user_id, "runs": [], "days": days})
 
 
@@ -217,7 +225,7 @@ def get_training_load(user_id: str, days: int = 14) -> str:
         }
         return json.dumps(result, ensure_ascii=False)
     except Exception as e:
-        print(f"[tools] get_training_load error: {e}")
+        logger.exception("[tools] get_training_load error: %s", e)
         return json.dumps({"user_id": user_id, "total_km": 0.0, "period_days": days})
 
 
@@ -245,7 +253,7 @@ def get_race_history(user_id: str) -> str:
         }
         return json.dumps(result, ensure_ascii=False)
     except Exception as e:
-        print(f"[tools] get_race_history error: {e}")
+        logger.exception("[tools] get_race_history error: %s", e)
         return json.dumps({"user_id": user_id, "personal_bests": {}, "injury_history": []})
 
 
@@ -276,8 +284,234 @@ def search_knowledge(query: str, top_k: int = 3) -> str:
         ]
         return json.dumps(payload, ensure_ascii=False)
     except Exception as e:
-        print(f"[tools] search_knowledge error: {e}")
+        logger.exception("[tools] search_knowledge error: %s", e)
         return json.dumps([])
 
 
-ALL_TOOLS = [get_recent_runs, get_training_load, get_race_history, search_knowledge]
+# ---------------------------------------------------------------------------
+# Tool 5 - get_weekly_trend
+# ---------------------------------------------------------------------------
+
+
+class GetWeeklyTrendInput(BaseModel):
+    user_id: str = Field(description="Unique user identifier")
+    weeks: int = Field(default=8, ge=1, description="Number of past weeks to analyze, default 8")
+
+
+class WeeklyTrendEntry(TypedDict):
+    week_label: str
+    start_date: str
+    total_km: float
+    runs: int
+    avg_pace_per_km: str
+    avg_hr: int
+
+
+class WeeklyTrendPayload(TypedDict):
+    user_id: str
+    weeks_analyzed: int
+    trend: list[WeeklyTrendEntry]
+    overall_direction: str
+
+
+def _pace_str_to_seconds(pace: str) -> float:
+    """Convert 'M:SS' pace string to total seconds for averaging."""
+    try:
+        parts = pace.split(":")
+        return int(parts[0]) * 60 + int(parts[1])
+    except (ValueError, IndexError):
+        return 360.0  # default to 6:00/km if unparseable
+
+
+def _seconds_to_pace_str(seconds: float) -> str:
+    """Convert total seconds back to 'M:SS' pace string."""
+    total = round(seconds)
+    m = total // 60
+    s = total % 60
+    return f"{m}:{s:02d}"
+
+
+@tool(args_schema=GetWeeklyTrendInput)
+def get_weekly_trend(user_id: str, weeks: int = 8) -> str:
+    """Return week-by-week training volume trend over the last N weeks.
+
+    Call this when the user asks about long-term trends: is mileage increasing or
+    decreasing over time, how training has evolved over the past months, or whether
+    they are building fitness progressively.
+    """
+    try:
+        data = _load_mock_data()
+        all_runs: list[RunRecord] = data.get("recent_runs", [])
+        now = datetime.now()
+        # Pre-parse dates once to avoid O(weeks × runs) strptime calls in the loop.
+        parsed_runs = [(r, _parse_iso_date(r["date"])) for r in all_runs]
+
+        trend: list[WeeklyTrendEntry] = []
+        for i in range(weeks, 0, -1):
+            week_end = now - timedelta(days=(i - 1) * 7)
+            week_start = week_end - timedelta(days=7)
+            week_runs = [
+                r for r, d in parsed_runs
+                if week_start <= d < week_end
+            ]
+            if week_runs:
+                total_km = round(sum(r["distance_km"] for r in week_runs), 1)
+                avg_pace_secs = sum(
+                    _pace_str_to_seconds(r["avg_pace_per_km"]) for r in week_runs
+                ) / len(week_runs)
+                avg_hr = round(sum(r["avg_hr"] for r in week_runs) / len(week_runs))
+            else:
+                total_km = 0.0
+                avg_pace_secs = 0.0
+                avg_hr = 0
+
+            trend.append(WeeklyTrendEntry(
+                week_label=f"W-{i}" if i > 1 else "This week",
+                start_date=week_start.strftime("%Y-%m-%d"),
+                total_km=total_km,
+                runs=len(week_runs),
+                avg_pace_per_km=_seconds_to_pace_str(avg_pace_secs) if avg_pace_secs > 0 else "-",
+                avg_hr=avg_hr,
+            ))
+
+        # Determine overall direction from first to last non-zero week
+        non_zero = [w for w in trend if w["total_km"] > 0]
+        if len(non_zero) >= 2:
+            first_km = non_zero[0]["total_km"]
+            last_km = non_zero[-1]["total_km"]
+            change_pct = (last_km - first_km) / first_km * 100
+            if change_pct > 5:
+                direction = f"INCREASING (+{round(change_pct, 1)}% over {len(non_zero)} weeks)"
+            elif change_pct < -5:
+                direction = f"DECREASING ({round(change_pct, 1)}% over {len(non_zero)} weeks)"
+            else:
+                direction = "STABLE (less than 5% change)"
+        else:
+            direction = "INSUFFICIENT DATA"
+
+        payload = WeeklyTrendPayload(
+            user_id=user_id,
+            weeks_analyzed=weeks,
+            trend=trend,
+            overall_direction=direction,
+        )
+        return json.dumps(payload, ensure_ascii=False)
+    except Exception as e:
+        logger.exception("[tools] get_weekly_trend error: %s", e)
+        return json.dumps({"user_id": user_id, "trend": [], "weeks_analyzed": weeks})
+
+
+# ---------------------------------------------------------------------------
+# Tool 6 - get_pace_prediction
+# ---------------------------------------------------------------------------
+
+
+class GetPacePredictionInput(BaseModel):
+    user_id: str = Field(description="Unique user identifier")
+    target_distance_km: float = Field(
+        gt=0,
+        description="Target race distance in km (e.g. 5.0, 10.0, 21.1, 42.2)",
+    )
+
+
+class PacePredictionPayload(TypedDict):
+    user_id: str
+    target_distance_km: float
+    predicted_finish_time: str
+    predicted_pace_per_km: str
+    based_on: str
+    confidence: str
+
+
+def _riegel_predict(known_time_min: float, known_dist_km: float, target_dist_km: float) -> float:
+    """Riegel's formula: T2 = T1 * (D2/D1)^1.06 — the standard race time predictor."""
+    return known_time_min * ((target_dist_km / known_dist_km) ** 1.06)
+
+
+def _compute_confidence(ref_dist: float, target_dist: float) -> str:
+    """High confidence when reference and target distances are within 150% of each other."""
+    if abs(ref_dist - target_dist) / target_dist < 1.5:
+        return "HIGH"
+    return "MEDIUM (reference distance differs significantly)"
+
+
+def _minutes_to_time_str(minutes: float) -> str:
+    """Convert decimal minutes to H:MM:SS or M:SS string."""
+    total_seconds = int(round(minutes * 60))
+    hours = total_seconds // 3600
+    mins = (total_seconds % 3600) // 60
+    secs = total_seconds % 60
+    if hours > 0:
+        return f"{hours}:{mins:02d}:{secs:02d}"
+    return f"{mins}:{secs:02d}"
+
+
+@tool(args_schema=GetPacePredictionInput)
+def get_pace_prediction(user_id: str, target_distance_km: float) -> str:
+    """Predict finish time and pace for a target race distance using the user's actual training data.
+
+    Uses Riegel's formula calibrated against the user's best recent performance.
+    Call this when the user asks 'can I run a sub-X time?', 'what pace should I target?',
+    or 'what is my predicted time for a half marathon / 10K / 5K?'.
+    """
+    try:
+        data = _load_mock_data()
+        pbs = data.get("personal_bests", {})
+
+        reference_points: list[tuple[float, float]] = []
+        pb_map = {
+            5.0: pbs.get("5k_minutes"),
+            10.0: pbs.get("10k_minutes"),
+            21.1: pbs.get("half_marathon_minutes"),
+        }
+        for dist, time_min in pb_map.items():
+            if time_min:
+                reference_points.append((dist, float(time_min)))
+
+        # Also derive a reference from recent tempo/interval runs if no PB available
+        if not reference_points:
+            all_runs: list[RunRecord] = data.get("recent_runs", [])
+            quality_runs = [r for r in all_runs if r.get("type") in ("tempo", "interval")]
+            if quality_runs:
+                best_pace_str = min(
+                    quality_runs, key=lambda r: _pace_str_to_seconds(r["avg_pace_per_km"])
+                )["avg_pace_per_km"]
+                est_5k_time = _pace_str_to_seconds(best_pace_str) / 60 * 5
+                reference_points.append((5.0, est_5k_time))
+
+        if not reference_points:
+            return json.dumps({
+                "user_id": user_id,
+                "error": "No race history or quality runs available to base prediction on.",
+            })
+
+        # Use the reference point closest to target distance for most accurate prediction
+        ref_dist, ref_time = min(
+            reference_points, key=lambda p: abs(p[0] - target_distance_km)
+        )
+
+        predicted_min = _riegel_predict(ref_time, ref_dist, target_distance_km)
+        predicted_pace_secs = (predicted_min / target_distance_km) * 60
+
+        payload = PacePredictionPayload(
+            user_id=user_id,
+            target_distance_km=target_distance_km,
+            predicted_finish_time=_minutes_to_time_str(predicted_min),
+            predicted_pace_per_km=_seconds_to_pace_str(predicted_pace_secs),
+            based_on=f"Personal best: {ref_dist}km in {_minutes_to_time_str(ref_time)}",
+            confidence=_compute_confidence(ref_dist, target_distance_km),
+        )
+        return json.dumps(payload, ensure_ascii=False)
+    except Exception as e:
+        logger.exception("[tools] get_pace_prediction error: %s", e)
+        return json.dumps({"user_id": user_id, "error": str(e)})
+
+
+ALL_TOOLS = [
+    get_recent_runs,
+    get_training_load,
+    get_race_history,
+    search_knowledge,
+    get_weekly_trend,
+    get_pace_prediction,
+]

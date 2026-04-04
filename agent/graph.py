@@ -1,3 +1,5 @@
+import threading
+
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
@@ -7,17 +9,16 @@ from langgraph.prebuilt import ToolNode
 from agent.nodes import generate_response, reflect_on_answer, retrieve_context
 from agent.state import AgentState
 from agent.tools import ALL_TOOLS
+from agent.utils import get_last_message
 
 _memory = MemorySaver()
 _graph: CompiledStateGraph | None = None
+_graph_lock = threading.Lock()
 
 
 def _get_latest_assistant_text(state: AgentState) -> str:
-    """Read the latest assistant content from LangChain message objects."""
-    for message in reversed(state.get("messages", [])):
-        if isinstance(message, AIMessage):
-            return str(message.content)
-    return ""
+    msg = get_last_message(state, AIMessage)
+    return str(msg.content) if msg else ""
 
 
 def _should_reflect(state: AgentState) -> str:
@@ -58,32 +59,35 @@ def get_graph() -> CompiledStateGraph:
     global _graph
     if _graph is not None:
         return _graph
+    with _graph_lock:
+        if _graph is not None:  # re-check inside lock
+            return _graph
 
-    graph = StateGraph(AgentState)
-    tool_node = ToolNode(ALL_TOOLS)
+        graph = StateGraph(AgentState)
+        tool_node = ToolNode(ALL_TOOLS)
 
-    graph.add_node("retrieve_context", retrieve_context)
-    graph.add_node("generate_response", generate_response)
-    graph.add_node("tools", tool_node)
-    graph.add_node("reflect_on_answer", reflect_on_answer)
+        graph.add_node("retrieve_context", retrieve_context)
+        graph.add_node("generate_response", generate_response)
+        graph.add_node("tools", tool_node)
+        graph.add_node("reflect_on_answer", reflect_on_answer)
 
-    graph.set_entry_point("retrieve_context")
-    graph.add_edge("retrieve_context", "generate_response")
+        graph.set_entry_point("retrieve_context")
+        graph.add_edge("retrieve_context", "generate_response")
 
-    graph.add_conditional_edges(
-        "generate_response",
-        route_after_generate,
-        {
-            "tools": "tools",
-            "reflect": "reflect_on_answer",
-            "end": END,
-        },
-    )
+        graph.add_conditional_edges(
+            "generate_response",
+            route_after_generate,
+            {
+                "tools": "tools",
+                "reflect": "reflect_on_answer",
+                "end": END,
+            },
+        )
 
-    graph.add_edge("tools", "generate_response")
-    graph.add_edge("reflect_on_answer", "generate_response")
+        graph.add_edge("tools", "generate_response")
+        graph.add_edge("reflect_on_answer", "generate_response")
 
-    _graph = graph.compile(checkpointer=_memory)
+        _graph = graph.compile(checkpointer=_memory)
     return _graph
 
 
