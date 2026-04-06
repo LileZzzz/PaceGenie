@@ -135,7 +135,7 @@ def generate_response(state: AgentState) -> MessageUpdate:
 
     prompt_messages = [
         SystemMessage(content=system_prompt),
-        SystemMessage(content=f"Retrieved context: {state.get('retrieved_context')}"),
+        SystemMessage(content=f"Retrieved context: {state.get('retrieved_context') or 'No context available.'}"),
     ] + state.get("messages", [])
 
     try:

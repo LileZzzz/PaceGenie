@@ -6,6 +6,8 @@ import { RaceCard } from './RaceCard';
 import { ZoneCard } from './ZoneCard';
 import { PBCard } from './PBCard';
 import { InjuryHistory } from './InjuryHistory';
+import { ZoneDistributionChart } from './ZoneDistributionChart';
+import { PacePredictor } from './PacePredictor';
 import type { MockGarminData } from '@/types';
 
 interface DashboardProps {
@@ -24,19 +26,25 @@ export function Dashboard({ data }: DashboardProps) {
       {/* Heart Rate Chart - from recent_runs */}
       <HeartRateChart runs={data.recent_runs} profile={data.profile} zones={data.training_zones} />
 
-      {/* Run History - from recent_runs */}
-      <RunHistory runs={data.recent_runs} />
+      {/* Zone Distribution - companion to HR chart */}
+      <ZoneDistributionChart runs={data.recent_runs} zones={data.training_zones} />
 
-      {/* Personal Bests - from personal_bests */}
+      {/* Race Time Predictor - interactive tool */}
+      <PacePredictor pbs={data.personal_bests} />
+
+      {/* Personal Bests */}
       <PBCard pbs={data.personal_bests} />
 
-      {/* Upcoming Race - from upcoming_races */}
+      {/* Upcoming Race */}
       <RaceCard races={data.upcoming_races} />
 
-      {/* Training Zones - from training_zones */}
+      {/* Training Zones reference */}
       <ZoneCard zones={data.training_zones} />
 
-      {/* Injury History - from injury_history */}
+      {/* Run History - detailed log */}
+      <RunHistory runs={data.recent_runs} />
+
+      {/* Injury History - historical record */}
       <InjuryHistory injuries={data.injury_history} />
 
       {/* Bottom spacing */}

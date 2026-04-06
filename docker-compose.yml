@@ -17,5 +17,18 @@ services:
       timeout: 5s
       retries: 5
 
+  backend:
+    build: .
+    container_name: pacegenie-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://pacegenie:password@postgres:5432/pacegenie
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres_data:

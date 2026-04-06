@@ -100,7 +100,7 @@ def _ensure_schema(session: Session) -> None:
     """
     session.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     session.commit()
-    _Base.metadata.create_all(session.get_bind())
+    _Base.metadata.create_all(get_db_engine())
 
 
 def _upsert_chunks(session: Session, records: list[ChunkRecord]) -> None:

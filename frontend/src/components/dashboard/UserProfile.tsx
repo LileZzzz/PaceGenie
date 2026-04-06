@@ -1,4 +1,4 @@
-import { TrendingUp, Settings, Bell, Heart, Target } from 'lucide-react';
+import { TrendingUp, Heart, Target } from 'lucide-react';
 import type { Profile } from '@/types';
 
 interface UserProfileProps {
@@ -6,15 +6,13 @@ interface UserProfileProps {
 }
 
 export function UserProfile({ profile }: UserProfileProps) {
-  const initial = profile.name?.[0]?.toUpperCase() || 'R';
-  
   return (
     <div className="p-5 bg-gradient-to-br from-card to-background border-b border-border/50">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center mb-4">
         <div className="flex items-center gap-4">
           <div className="relative">
-            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-red-500 to-red-700 flex items-center justify-center text-white text-xl font-bold border-2 border-red-500/30">
-              {initial}
+            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-red-500 to-red-700 flex items-center justify-center text-3xl border-2 border-red-500/30 select-none">
+              🏃
             </div>
             <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-red-500 rounded-full flex items-center justify-center border-2 border-background">
               <TrendingUp className="w-3 h-3 text-white" />
@@ -27,14 +25,6 @@ export function UserProfile({ profile }: UserProfileProps) {
               Weekly Target: {profile.weekly_target_km}km
             </span>
           </div>
-        </div>
-        <div className="flex gap-1">
-          <button className="p-2 rounded-lg hover:bg-white/5 text-muted-foreground hover:text-white transition-colors">
-            <Bell className="w-4 h-4" />
-          </button>
-          <button className="p-2 rounded-lg hover:bg-white/5 text-muted-foreground hover:text-white transition-colors">
-            <Settings className="w-4 h-4" />
-          </button>
         </div>
       </div>
 

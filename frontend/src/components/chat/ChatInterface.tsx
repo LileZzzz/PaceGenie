@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Sparkles, Zap, Target, Flame, Heart, ChevronDown, MoreHorizontal } from 'lucide-react';
+import { Send, Sparkles, Zap, Target, Flame, Heart, ChevronDown } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatMessage } from '@/types';
@@ -69,11 +69,12 @@ export function ChatInterface({ userId, sessionId, backendOnline }: ChatInterfac
   }, [messages]);
 
   const handleSend = async () => {
-    if (!inputValue.trim()) return;
+    const messageText = inputValue.trim();
+    if (!messageText) return;
 
     const userMessage: ChatMessage = {
       role: 'user',
-      content: inputValue,
+      content: messageText,
       timestamp: new Date(),
     };
 
@@ -86,7 +87,7 @@ export function ChatInterface({ userId, sessionId, backendOnline }: ChatInterfac
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: inputValue,
+          message: messageText,
           user_id: userId,
           session_id: sessionId,
         }),
@@ -147,9 +148,6 @@ export function ChatInterface({ userId, sessionId, backendOnline }: ChatInterfac
             </p>
           </div>
         </div>
-        <button className="p-2 rounded-lg hover:bg-white/5 text-muted-foreground hover:text-white transition-colors">
-          <MoreHorizontal className="w-4 h-4" />
-        </button>
       </div>
 
       {/* Messages area */}

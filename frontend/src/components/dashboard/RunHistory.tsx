@@ -42,7 +42,7 @@ export function RunHistory({ runs }: RunHistoryProps) {
       <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
         {sortedRuns.map((run, index) => (
           <div
-            key={index}
+            key={`${run.date}-${run.type}`}
             onClick={() => setSelectedRun(selectedRun === index ? null : index)}
             className={`group relative p-4 rounded-xl cursor-pointer transition-all duration-300 ${
               selectedRun === index 

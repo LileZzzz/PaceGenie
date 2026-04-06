@@ -11,7 +11,7 @@ import mockData from '../data/mock_garmin.json';
 function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [data] = useState<MockGarminData>(mockData as MockGarminData);
-  const [sessionId] = useState(() => `session_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`);
+  const [sessionId] = useState(() => `session_${crypto.randomUUID().replace(/-/g, '')}`);
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
 
   useEffect(() => {

@@ -1,0 +1,215 @@
+name: Deploy
+
+on:
+  push:
+    branches: [master, main]
+
+# Prevent concurrent deploys — queue instead of cancel
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  id-token: write  # required for OIDC auth with AWS
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: pacegenie-backend
+  FRONTEND_BUCKET: pacegenie-frontend  # set to your S3 bucket name
+
+jobs:
+  # ── 1. Tests must pass before any deploy ─────────────────────────────────
+  test-backend:
+    name: Backend · tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: pacegenie
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: pacegenie
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pacegenie"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      LLM_MODEL: ${{ secrets.LLM_MODEL }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+      DATABASE_URL: postgresql://pacegenie:password@localhost:5432/pacegenie
+      LANGSMITH_TRACING: "false"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - run: uv sync --frozen
+
+      - run: uv run pytest tests/ -v --tb=short
+
+  test-frontend:
+    name: Frontend · type check + build
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - run: npx tsc --noEmit
+
+      - name: Build (with production API URL)
+        run: npm run build
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+
+      # Upload the dist/ folder so the deploy job can use it without rebuilding
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+          retention-days: 1
+
+  # ── 2. Build backend Docker image and push to ECR ────────────────────────
+  build-backend:
+    name: Backend · build + push ECR
+    runs-on: ubuntu-latest
+    needs: [test-backend, test-frontend]
+
+    outputs:
+      image-uri: ${{ steps.build.outputs.image-uri }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC — no long-lived keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push
+        id: build
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          IMAGE_URI="${REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+          docker build -t "${IMAGE_URI}" .
+          docker tag "${IMAGE_URI}" "${REGISTRY}/${ECR_REPOSITORY}:latest"
+          docker push "${IMAGE_URI}"
+          docker push "${REGISTRY}/${ECR_REPOSITORY}:latest"
+          echo "image-uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+
+  # ── 3. Deploy backend to EC2 ─────────────────────────────────────────────
+  deploy-backend:
+    name: Backend · deploy to EC2
+    runs-on: ubuntu-latest
+    needs: build-backend
+    environment: production
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          # Pass the image URI as an env var — never interpolate job outputs
+          # directly in script: to avoid injection via crafted registry values.
+          envs: AWS_REGION,ECR_REPOSITORY,IMAGE_URI
+          script: |
+            # Authenticate Docker to ECR from inside the instance
+            aws ecr get-login-password --region "$AWS_REGION" \
+              | docker login --username AWS --password-stdin \
+                "$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+            # Pull latest image
+            docker pull "$IMAGE_URI"
+
+            # Rolling restart — stop old container, start new one
+            docker stop pacegenie-backend || true
+            docker rm   pacegenie-backend || true
+
+            docker run -d \
+              --name pacegenie-backend \
+              --restart unless-stopped \
+              -p 8000:8000 \
+              --env-file /home/ec2-user/pacegenie.env \
+              "$IMAGE_URI"
+
+            # Basic smoke test — wait up to 30 s for /health to return 200
+            for i in $(seq 1 6); do
+              if curl -fsS http://localhost:8000/health > /dev/null 2>&1; then
+                echo "Health check passed"
+                exit 0
+              fi
+              sleep 5
+            done
+            echo "Health check failed after 30 s" && exit 1
+        env:
+          IMAGE_URI: ${{ needs.build-backend.outputs.image-uri }}
+
+  # ── 4. Deploy frontend to S3 + invalidate CloudFront ─────────────────────
+  deploy-frontend:
+    name: Frontend · deploy to S3 + CloudFront
+    runs-on: ubuntu-latest
+    needs: [test-frontend, deploy-backend]
+    environment: production
+
+    steps:
+      - name: Download built frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist/
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Sync to S3
+        run: |
+          # Long-lived assets (JS/CSS with content hashes) — cache 1 year
+          aws s3 sync dist/ "s3://${FRONTEND_BUCKET}" \
+            --exclude "index.html" \
+            --cache-control "public,max-age=31536000,immutable" \
+            --delete
+
+          # index.html — no-cache so users always get the latest shell
+          aws s3 cp dist/index.html "s3://${FRONTEND_BUCKET}/index.html" \
+            --cache-control "no-cache,no-store,must-revalidate"
+
+      - name: Invalidate CloudFront cache
+        env:
+          CF_DIST_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "$CF_DIST_ID" \
+            --paths "/*"

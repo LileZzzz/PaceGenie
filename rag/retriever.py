@@ -10,11 +10,15 @@ from __future__ import annotations
 
 from typing import TypedDict
 
+import logging
+
 from rank_bm25 import BM25Okapi
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from rag.embeddings import embed_query, get_db_engine
+
+logger = logging.getLogger(__name__)
 
 VECTOR_WEIGHT: float = 0.6
 BM25_WEIGHT: float = 0.4
@@ -53,7 +57,7 @@ def _fetch_all_chunks() -> list[RetrievedChunk]:
             for r in rows
         ]
     except Exception as e:
-        print(f"[retriever] _fetch_all_chunks error: {e}")
+        logger.exception("[retriever] _fetch_all_chunks error: %s", e)
         return []
 
 
@@ -78,7 +82,7 @@ def _vector_search(query_vec: list[float], top_k: int) -> list[RetrievedChunk]:
             for r in rows
         ]
     except Exception as e:
-        print(f"[retriever] _vector_search error: {e}")
+        logger.exception("[retriever] _vector_search error: %s", e)
         return []
 
 

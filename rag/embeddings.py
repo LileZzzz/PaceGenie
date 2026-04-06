@@ -4,9 +4,12 @@ Kept separate from ingest.py so that retriever.py can import embed_query at
 search time without pulling in all the file I/O and ingestion dependencies.
 """
 
+import logging
 import os
 
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
+
+logger = logging.getLogger(__name__)
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sqlalchemy import Engine, create_engine
 
@@ -80,9 +83,7 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
     try:
         return get_embeddings_client().embed_documents(texts)
     except Exception as e:
-        print(f"[embeddings] embed_texts error: {e}")
-        # Return zero vectors so ingestion degrades gracefully when the API is
-        # temporarily unavailable; these rows are harmless and can be re-ingested.
+        logger.exception("[embeddings] embed_texts error: %s", e)
         return [[0.0] * EMBEDDING_DIM for _ in texts]
 
 
@@ -94,5 +95,5 @@ def embed_query(text: str) -> list[float]:
     try:
         return get_embeddings_client().embed_query(text)
     except Exception as e:
-        print(f"[embeddings] embed_query error: {e}")
+        logger.exception("[embeddings] embed_query error: %s", e)
         return [0.0] * EMBEDDING_DIM
