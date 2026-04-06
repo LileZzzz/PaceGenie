@@ -9,13 +9,23 @@ with 3 evaluators published to the LangSmith dashboard:
 
 Usage:
     docker-compose up -d
+
+    # Run baseline (first time):
     uv run python evaluation/langsmith_eval.py
 
+    # Run with a version tag (for comparison):
+    uv run python evaluation/langsmith_eval.py --version v2-with-rag
+
+    # Run with a custom experiment name:
+    uv run python evaluation/langsmith_eval.py --experiment "after-prompt-tuning"
+
 View results at: smith.langchain.com → PaceGenie project → Experiments
+Each run creates a new experiment row — compare them side-by-side in the dashboard.
 """
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -25,10 +35,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 load_dotenv()
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from langsmith import Client
 from langsmith.evaluation import evaluate
+from openai import OpenAI
 from openevals.llm import create_llm_as_judge
 from openevals.prompts import HALLUCINATION_PROMPT, ANSWER_RELEVANCE_PROMPT
 
@@ -164,7 +175,23 @@ def ensure_dataset(client: Client) -> None:
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Run LangSmith evaluation for PaceGenie")
+    parser.add_argument(
+        "--version", default="v1",
+        help="Version tag shown in LangSmith dashboard (e.g. v1, v2-with-rag)"
+    )
+    parser.add_argument(
+        "--experiment", default=None,
+        help="Override experiment prefix (default: pacegenie-<version>)"
+    )
+    args = parser.parse_args()
+
+    experiment_prefix = args.experiment or f"pacegenie-{args.version}"
+
     print("PaceGenie — LangSmith Evaluation")
+    print("=" * 50)
+    print(f"Version    : {args.version}")
+    print(f"Experiment : {experiment_prefix}")
     print("=" * 50)
 
     # Verify LangSmith env vars
@@ -175,23 +202,29 @@ def main() -> None:
     client = Client()
     ensure_dataset(client)
 
-    # Build the two prebuilt openevals evaluators
-    # They use the same LLM config as the agent
-    model_str = f"openai/{os.getenv('LLM_MODEL', 'kimi-k2.5')}"
+    # Build openevals LLM-as-judge evaluators using a raw OpenAI client
+    # so they work with any custom base_url (Kimi, OpenAI, etc.)
+    openai_client = OpenAI(
+        api_key=os.getenv("LLM_API_KEY", ""),
+        base_url=os.getenv("LLM_BASE_URL"),
+    )
+    model_name = os.getenv("LLM_MODEL", "kimi-k2.5")
 
     hallucination_evaluator = create_llm_as_judge(
         prompt=HALLUCINATION_PROMPT,
-        model=model_str,
+        judge=openai_client,
+        model=model_name,
         feedback_key="hallucination",
     )
 
     relevance_evaluator = create_llm_as_judge(
         prompt=ANSWER_RELEVANCE_PROMPT,
-        model=model_str,
+        judge=openai_client,
+        model=model_name,
         feedback_key="answer_relevance",
     )
 
-    print(f"Running {len(QUESTIONS)} questions through the agent...")
+    print(f"\nRunning {len(QUESTIONS)} questions through the agent...")
     print("(This will take ~10 minutes — each question calls the LLM)\n")
 
     results = evaluate(
@@ -202,10 +235,11 @@ def main() -> None:
             relevance_evaluator,
             personalization_judge,
         ],
-        experiment_prefix="pacegenie-baseline",
+        experiment_prefix=experiment_prefix,
         metadata={
-            "model": os.getenv("LLM_MODEL"),
-            "description": "Baseline evaluation — hallucination, relevance, personalization",
+            "model": model_name,
+            "version": args.version,
+            "description": "hallucination + relevance + personalization scoring",
         },
         max_concurrency=1,  # sequential to avoid rate limiting
     )
