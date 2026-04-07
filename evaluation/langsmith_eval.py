@@ -35,15 +35,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 load_dotenv()
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from langsmith import Client
 from langsmith.evaluation import evaluate
 from openai import OpenAI
 from openevals.llm import create_llm_as_judge
-from openevals.prompts import HALLUCINATION_PROMPT, ANSWER_RELEVANCE_PROMPT
+from openevals.prompts import ANSWER_RELEVANCE_PROMPT
 
-from agent.graph import get_graph
+from agent.config import AgentConfig, CONFIG_MAP
+from agent.graph import build_graph, get_graph
 
 # ---------------------------------------------------------------------------
 # Dataset — 20 Garmin-grounded personalization questions
@@ -74,8 +75,48 @@ QUESTIONS: list[tuple[str, str]] = [
 ]
 
 # ---------------------------------------------------------------------------
-# LLM-as-Judge prompt for personalization (custom — prebuilts don't cover this)
+# LLM-as-Judge prompts — all custom (openevals HALLUCINATION_PROMPT requires
+# a {context} ground-truth variable we don't have in this dataset)
 # ---------------------------------------------------------------------------
+HALLUCINATION_PROMPT_CUSTOM = """\
+You are an expert evaluator checking if an AI running coach's response contains hallucinations.
+
+A hallucination is any specific fact, number, or claim in the response that is NOT present
+in the actual tool data retrieved below.
+
+Score:
+  1 — Fully grounded: all specific numbers/claims match the retrieved data, or are generic advice
+  0 — Hallucinated: contains specific numbers or claims that are NOT in the retrieved data below
+
+IMPORTANT: Generic running advice ("run 80% easy") is NOT a hallucination.
+Only flag numbers or user-specific claims that contradict or are absent from the retrieved data.
+
+<retrieved_data>
+{context}
+</retrieved_data>
+
+<question>{question}</question>
+<response>{answer}</response>
+
+Respond with ONLY a single integer: 0 or 1. No explanation.
+"""
+
+RELEVANCE_PROMPT_CUSTOM = """\
+You are an expert evaluator assessing whether an AI running coach's response answers the question.
+
+Score from 1 to 5:
+  1 — Completely off-topic or refuses to answer
+  2 — Tangentially related but does not address the question
+  3 — Partially answers the question but misses key aspects
+  4 — Mostly answers the question with minor gaps
+  5 — Fully and directly answers the question
+
+Respond with ONLY a single integer: 1, 2, 3, 4, or 5. No explanation.
+
+<question>{question}</question>
+<response>{answer}</response>
+"""
+
 PERSONALIZATION_PROMPT = """\
 You are an expert evaluator assessing an AI running coach's response.
 
@@ -100,10 +141,40 @@ Respond with ONLY a single integer: 1, 2, 3, 4, or 5. No explanation.
 """
 
 # ---------------------------------------------------------------------------
+# Helper — extract tool call results from the final message list
+# ---------------------------------------------------------------------------
+def _extract_context(result: dict) -> str:
+    """Build the full grounding context for the hallucination evaluator.
+
+    Combines two sources:
+    - retrieved_context: RAG chunks from the retrieve_context node (knowledge base)
+    - ToolMessage contents: Garmin tool call results (runs, load, race history, etc.)
+
+    The hallucination evaluator checks whether the final answer is grounded in
+    this combined context rather than invented numbers.
+    """
+    parts: list[str] = []
+
+    rag_context = result.get("retrieved_context", "")
+    if rag_context and rag_context not in ("No context available.", "Knowledge base temporarily unavailable."):
+        parts.append(f"[Knowledge base]\n{rag_context}")
+
+    tool_outputs = [
+        str(msg.content)
+        for msg in result.get("messages", [])
+        if isinstance(msg, ToolMessage) and msg.content
+    ]
+    if tool_outputs:
+        parts.append(f"[Garmin tool data]\n" + "\n".join(tool_outputs))
+
+    return "\n\n".join(parts) if parts else "No context retrieved."
+
+
+# ---------------------------------------------------------------------------
 # Target function — wraps the agent for evaluate()
 # ---------------------------------------------------------------------------
 def run_agent(inputs: dict) -> dict:
-    """evaluate() calls this with example.inputs. Returns {"reply": str}."""
+    """evaluate() calls this with example.inputs. Returns {"reply": str, "context": str}."""
     graph = get_graph()
     result = graph.invoke(
         {
@@ -114,10 +185,71 @@ def run_agent(inputs: dict) -> dict:
         },
         config={"configurable": {"thread_id": inputs["session_id"]}},
     )
+    context = _extract_context(result)
     for msg in reversed(result["messages"]):
         if isinstance(msg, AIMessage) and msg.content:
-            return {"reply": str(msg.content)}
-    return {"reply": ""}
+            return {"reply": str(msg.content), "context": context}
+    return {"reply": "", "context": context}
+
+
+def run_agent_with_config(config: AgentConfig):
+    """Return a evaluate()-compatible target function using the given AgentConfig.
+
+    A fresh graph is compiled once (in the outer scope) and reused across all
+    20 questions in the eval run. No checkpointer — each invoke() is stateless.
+    """
+    graph = build_graph(config)
+
+    def _run(inputs: dict) -> dict:
+        result = graph.invoke(
+            {
+                "messages": [("user", inputs["question"])],
+                "user_id": "demo_user",
+                "retrieved_context": None,
+                "reflection_count": 0,
+            },
+            config={},  # no thread_id — eval graphs have no checkpointer
+        )
+        context = _extract_context(result)
+        for msg in reversed(result["messages"]):
+            if isinstance(msg, AIMessage) and msg.content:
+                return {"reply": str(msg.content), "context": context}
+        return {"reply": "", "context": context}
+
+    return _run
+
+
+# ---------------------------------------------------------------------------
+# Evaluator 2 — Custom relevance judge (openevals ANSWER_RELEVANCE_PROMPT expects JSON
+# structured output which Kimi does not support — plain text prompt instead)
+# ---------------------------------------------------------------------------
+def relevance_judge(inputs: dict, outputs: dict) -> dict:
+    """Score 1-5 how well the reply answers the question."""
+    llm = ChatOpenAI(
+        model=os.getenv("LLM_MODEL", "kimi-k2.5"),
+        api_key=os.getenv("LLM_API_KEY", ""),
+        base_url=os.getenv("LLM_BASE_URL"),
+        temperature=0,
+        default_headers={
+            "User-Agent": os.getenv("LLM_USER_AGENT", "claude-code/1.0"),
+            "X-Client-Name": os.getenv("LLM_CLIENT_NAME", "claude-code"),
+        },
+    )
+    prompt = RELEVANCE_PROMPT_CUSTOM.format(
+        question=inputs.get("question", ""),
+        answer=outputs.get("reply", ""),
+    )
+    raw = llm.invoke([HumanMessage(content=prompt)]).content.strip()
+    score = 3  # fallback
+    for ch in raw:
+        if ch in "12345":
+            score = int(ch)
+            break
+    return {
+        "key": "answer_relevance",
+        "score": score / 5.0,
+        "comment": f"Raw score: {score}/5",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +262,10 @@ def personalization_judge(inputs: dict, outputs: dict) -> dict:
         api_key=os.getenv("LLM_API_KEY", ""),
         base_url=os.getenv("LLM_BASE_URL"),
         temperature=0,
+        default_headers={
+            "User-Agent": os.getenv("LLM_USER_AGENT", "claude-code/1.0"),
+            "X-Client-Name": os.getenv("LLM_CLIENT_NAME", "claude-code"),
+        },
     )
     prompt = PERSONALIZATION_PROMPT.format(
         question=inputs.get("question", ""),
@@ -145,6 +281,40 @@ def personalization_judge(inputs: dict, outputs: dict) -> dict:
         "key": "personalization_score",
         "score": score / 5.0,  # normalize to 0–1 for LangSmith
         "comment": f"Raw score: {score}/5",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Evaluator 1 — Custom hallucination judge (replaces openevals HALLUCINATION_PROMPT
+# which requires a {context} ground-truth variable not in our dataset)
+# ---------------------------------------------------------------------------
+def hallucination_judge(inputs: dict, outputs: dict) -> dict:
+    """Score 0/1: 1=grounded, 0=hallucinated."""
+    llm = ChatOpenAI(
+        model=os.getenv("LLM_MODEL", "kimi-k2.5"),
+        api_key=os.getenv("LLM_API_KEY", ""),
+        base_url=os.getenv("LLM_BASE_URL"),
+        temperature=0,
+        default_headers={
+            "User-Agent": os.getenv("LLM_USER_AGENT", "claude-code/1.0"),
+            "X-Client-Name": os.getenv("LLM_CLIENT_NAME", "claude-code"),
+        },
+    )
+    prompt = HALLUCINATION_PROMPT_CUSTOM.format(
+        question=inputs.get("question", ""),
+        answer=outputs.get("reply", ""),
+        context=outputs.get("context", "No tool data retrieved."),
+    )
+    raw = llm.invoke([HumanMessage(content=prompt)]).content.strip()
+    score = 1  # fallback: assume grounded
+    for ch in raw:
+        if ch in "01":
+            score = int(ch)
+            break
+    return {
+        "key": "hallucination",
+        "score": float(score),
+        "comment": f"Raw: {raw[:50]}",
     }
 
 
@@ -184,7 +354,19 @@ def main() -> None:
         "--experiment", default=None,
         help="Override experiment prefix (default: pacegenie-<version>)"
     )
+    parser.add_argument(
+        "--config",
+        choices=list(CONFIG_MAP.keys()),
+        default=None,
+        help="Ablation config to run (baseline, no-rag, no-reflection, better-prompt). "
+             "Automatically sets --version if not explicitly provided.",
+    )
     args = parser.parse_args()
+
+    # When --config is used, auto-derive the version tag unless user overrode it
+    if args.config and args.version == "v1":
+        _, auto_version = CONFIG_MAP[args.config]
+        args.version = auto_version
 
     experiment_prefix = args.experiment or f"pacegenie-{args.version}"
 
@@ -202,37 +384,38 @@ def main() -> None:
     client = Client()
     ensure_dataset(client)
 
-    # Build openevals LLM-as-judge evaluators using a raw OpenAI client
-    # so they work with any custom base_url (Kimi, OpenAI, etc.)
+    # Build openevals LLM-as-judge evaluator for relevance (uses raw OpenAI client
+    # so it works with any custom base_url — Kimi, OpenAI, etc.)
     openai_client = OpenAI(
         api_key=os.getenv("LLM_API_KEY", ""),
         base_url=os.getenv("LLM_BASE_URL"),
+        default_headers={
+            "User-Agent": os.getenv("LLM_USER_AGENT", "claude-code/1.0"),
+            "X-Client-Name": os.getenv("LLM_CLIENT_NAME", "claude-code"),
+        },
     )
     model_name = os.getenv("LLM_MODEL", "kimi-k2.5")
 
-    hallucination_evaluator = create_llm_as_judge(
-        prompt=HALLUCINATION_PROMPT,
-        judge=openai_client,
-        model=model_name,
-        feedback_key="hallucination",
-    )
+    # All three evaluators are custom judges — openevals prebuilts require JSON structured
+    # output which Kimi does not support reliably
 
-    relevance_evaluator = create_llm_as_judge(
-        prompt=ANSWER_RELEVANCE_PROMPT,
-        judge=openai_client,
-        model=model_name,
-        feedback_key="answer_relevance",
-    )
+    # Choose target function: config-specific graph or default singleton
+    if args.config:
+        agent_config, _ = CONFIG_MAP[args.config]
+        target_fn = run_agent_with_config(agent_config)
+        print(f"Config     : {args.config}")
+    else:
+        target_fn = run_agent
 
     print(f"\nRunning {len(QUESTIONS)} questions through the agent...")
     print("(This will take ~10 minutes — each question calls the LLM)\n")
 
     results = evaluate(
-        run_agent,
+        target_fn,
         data=DATASET_NAME,
         evaluators=[
-            hallucination_evaluator,
-            relevance_evaluator,
+            hallucination_judge,
+            relevance_judge,
             personalization_judge,
         ],
         experiment_prefix=experiment_prefix,

@@ -127,6 +127,10 @@ def main() -> None:
         api_key=os.getenv("LLM_API_KEY", ""),
         base_url=os.getenv("LLM_BASE_URL"),
         temperature=0,
+        default_headers={
+            "User-Agent": os.getenv("LLM_USER_AGENT", "claude-code/1.0"),
+            "X-Client-Name": os.getenv("LLM_CLIENT_NAME", "claude-code"),
+        },
     )
 
     scores: list[int] = []

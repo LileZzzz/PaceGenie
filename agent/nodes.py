@@ -108,30 +108,81 @@ def retrieve_context(state: AgentState) -> RetrieveContextUpdate:
         return {"retrieved_context": "Knowledge base temporarily unavailable."}
 
 
+# ---------------------------------------------------------------------------
+# System prompt variants — used by both the production node and make_generate_response()
+# ---------------------------------------------------------------------------
+_SYSTEM_PROMPT_BASE = (
+    "You are PaceGenie, a professional AI running coach. "
+    "You MUST follow these rules on EVERY response:\n\n"
+    "RULE 1 — Training data questions: If the user asks about their own runs, "
+    "mileage, pace, heart rate, injury risk, or race history, you MUST call the "
+    "appropriate Garmin tool. Use get_recent_runs for individual session details, "
+    "get_training_load for 14-day load and injury risk, get_weekly_trend for "
+    "multi-week volume trends (4-8+ weeks), and get_race_history for personal bests. "
+    "Never guess or fabricate numbers.\n\n"
+    "RULE 2 — Race time predictions: If the user asks 'can I run sub-X?', "
+    "'what is my predicted time?', or 'what pace should I target for a race?', "
+    "you MUST call get_pace_prediction with the target distance in km.\n\n"
+    "RULE 3 — Knowledge questions: If the user asks about running coaching topics "
+    "(pace zones, threshold training, VO2max intervals, injury prevention, "
+    "nutrition, recovery, marathon plans, heart rate training, 80/20 rule, etc.) "
+    "you MUST call search_knowledge to retrieve from the knowledge base. "
+    "Do NOT answer from your own internal knowledge — always use the tool.\n\n"
+    "Always include concrete numbers in your final answer."
+)
+
+_GROUNDING_V2_SUFFIX = (
+    "\n\nCRITICAL GROUNDING RULES:\n"
+    "You MUST cite at least 3 specific data points from the user's actual training data "
+    "(exact km distances, pace values in min/km, and heart rate values in bpm) in EVERY "
+    "response. Generic advice without specific numbers from the user's own data is not "
+    "acceptable. If tools return numbers, quote those exact values in your reply."
+)
+
+SYSTEM_PROMPTS: dict[str, str] = {
+    "default": _SYSTEM_PROMPT_BASE,
+    "grounding_v2": _SYSTEM_PROMPT_BASE + _GROUNDING_V2_SUFFIX,
+}
+
+
+def make_generate_response(variant: str = "default", tools: list | None = None):
+    """Return a LangGraph-compatible node function using the given prompt variant.
+
+    Used by build_graph() for evaluation configs. The production get_graph()
+    uses generate_response() directly (equivalent to variant="default").
+
+    Args:
+        variant: system prompt variant key ("default")
+        tools: tool list to bind to the LLM. If None, uses ALL_TOOLS (same as
+               production). Pass a filtered list for ablation configs like no-rag
+               that need to restrict which tools the LLM can call.
+    """
+    prompt_base = SYSTEM_PROMPTS.get(variant, SYSTEM_PROMPTS["default"])
+    # Bind tools now (once at factory call time, not per invoke)
+    tools_to_bind = tools if tools is not None else ALL_TOOLS
+    llm_bound = get_llm().bind_tools(tools_to_bind)
+
+    def _generate_response(state: AgentState) -> MessageUpdate:
+        user_id = state.get("user_id", "demo_user")
+        system_prompt = prompt_base + f"\nCurrent user_id: {user_id}"
+        prompt_messages = [
+            SystemMessage(content=system_prompt),
+            SystemMessage(content=f"Retrieved context: {state.get('retrieved_context') or 'No context available.'}"),
+        ] + state.get("messages", [])
+        try:
+            response = llm_bound.invoke(prompt_messages)
+            return {"messages": [response]}
+        except Exception as e:
+            logger.exception("[nodes] LLM error: %s", e)
+            return {"messages": [AIMessage(content="I'm temporarily unavailable. Please try again.")]}
+
+    return _generate_response
+
+
 def generate_response(state: AgentState) -> MessageUpdate:
     """Bind tools at generation time so the model can fetch grounded user data on demand."""
     user_id = state.get("user_id", "demo_user")
-
-    system_prompt = (
-        "You are PaceGenie, a professional AI running coach. "
-        "You MUST follow these rules on EVERY response:\n\n"
-        "RULE 1 — Training data questions: If the user asks about their own runs, "
-        "mileage, pace, heart rate, injury risk, or race history, you MUST call the "
-        "appropriate Garmin tool. Use get_recent_runs for individual session details, "
-        "get_training_load for 14-day load and injury risk, get_weekly_trend for "
-        "multi-week volume trends (4-8+ weeks), and get_race_history for personal bests. "
-        "Never guess or fabricate numbers.\n\n"
-        "RULE 2 — Race time predictions: If the user asks 'can I run sub-X?', "
-        "'what is my predicted time?', or 'what pace should I target for a race?', "
-        "you MUST call get_pace_prediction with the target distance in km.\n\n"
-        "RULE 3 — Knowledge questions: If the user asks about running coaching topics "
-        "(pace zones, threshold training, VO2max intervals, injury prevention, "
-        "nutrition, recovery, marathon plans, heart rate training, 80/20 rule, etc.) "
-        "you MUST call search_knowledge to retrieve from the knowledge base. "
-        "Do NOT answer from your own internal knowledge — always use the tool.\n\n"
-        "Always include concrete numbers in your final answer. "
-        f"Current user_id: {user_id}"
-    )
+    system_prompt = _SYSTEM_PROMPT_BASE + f"\nCurrent user_id: {user_id}"
 
     prompt_messages = [
         SystemMessage(content=system_prompt),
@@ -153,19 +204,33 @@ def generate_response(state: AgentState) -> MessageUpdate:
 def reflect_on_answer(state: AgentState) -> ReflectionUpdate:
     """Inject a targeted self-criticism prompt based on which quality gate failed.
 
-    Checking conditions here (not relying on graph routing flags) keeps the node
-    self-contained and makes the critique specific enough for the LLM to act on.
+    Two modes:
+    - Semantic: uses the LLM judge's REVISE reason from state["last_critique"]
+      (set by _should_reflect when semantic_reflection_enabled=True).
+    - Rule-based: falls back to checking reply length and digit presence.
     """
+    # Semantic path — judge already wrote a specific critique
+    last_critique = state.get("last_critique", "")
+    if last_critique:
+        prompt = (
+            f"{last_critique}\n\n"
+            "Please call the relevant training data tools and provide a more "
+            "grounded, specific answer that addresses the issues above."
+        )
+        return {
+            "messages": [HumanMessage(content=prompt)],
+            "reflection_count": state.get("reflection_count", 0) + 1,
+            "last_critique": "",  # clear so next iteration starts fresh
+        }
+
+    # Rule-based fallback
     msg = get_last_message(state, AIMessage)
     latest_text = str(msg.content) if msg and msg.content else ""
 
-    too_short = len(latest_text) < 100
-    no_numbers = not any(c.isdigit() for c in latest_text)
-
     issues: list[str] = []
-    if too_short:
+    if len(latest_text) < 100:
         issues.append("Your previous answer was too brief (under 100 characters).")
-    if no_numbers:
+    if not any(c.isdigit() for c in latest_text):
         issues.append(
             "Your previous answer did not cite any concrete numbers from the user's "
             "training data. You must include actual mileage (km), pace (min/km), "
@@ -178,7 +243,6 @@ def reflect_on_answer(state: AgentState) -> ReflectionUpdate:
         "Please call the relevant training data tools first, then give a detailed "
         "answer with specific numbers."
     )
-
     return {
         "messages": [HumanMessage(content=prompt)],
         "reflection_count": state.get("reflection_count", 0) + 1,
