@@ -163,6 +163,26 @@ Dataset: **PaceGenie Personalization Eval** (20 Garmin-grounded questions, `sess
 
 ---
 
+## Streaming Latency Results
+
+Measured locally (3 questions, LLM API: Kimi K2.5):
+
+| Metric | Streaming (`/api/chat/stream`) | Blocking (`/api/chat`) |
+|---|---|---|
+| Time to First Token (TTFT) | **3,293ms avg** | N/A — user waits for full response |
+| Wall-clock (total) | 12,087ms avg | 14,050ms avg |
+| User wait for first text | **3.3s** | **14.1s** |
+| TTFT / wall ratio | 27% | 100% |
+
+**User experience improvement:** First visible text arrives ~10.8 seconds earlier with streaming.
+
+Implementation uses Server-Sent Events (SSE) with LangGraph `astream_events(version="v2")`:
+- `on_tool_start` events → emit `{"status": "Calling get_recent_runs..."}` — shown in typing indicator
+- `on_chat_model_stream` events → emit `{"token": "..."}` — appended to message in real-time
+- Final `{"done": true, "session_id": "..."}` — signals completion
+
+---
+
 ## Resume Bullets
 
 ```
@@ -175,4 +195,8 @@ Dataset: **PaceGenie Personalization Eval** (20 Garmin-grounded questions, `sess
   final answer quality with APPROVE/REVISE verdict; targeted critique injected as next turn.
   Fired on 9/20 questions (45%) vs 0/20 for rule-based trigger — improved Personalization Score
   from 4.5/5.0 to 4.8/5.0 (+6.7% relative) and doubled average tool call depth (1.6 → 3.0).
+
+• Implemented SSE streaming via LangGraph astream_events(): Time to First Token 3.3s avg vs 14.1s
+  blocking (10.8s faster). Tool call status events ("Calling get_recent_runs...") shown in UI
+  during tool execution phase.
 ```

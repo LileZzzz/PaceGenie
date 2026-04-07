@@ -8,7 +8,7 @@ An AI-powered running coach built with LangGraph, Hybrid RAG, and a React dashbo
 
 - **Chat with your data** — Ask "Am I at injury risk?" or "Can I break 1:50 in the half?" and get answers pulled directly from your training history.
 - **Hybrid RAG** — Knowledge base answers use pgvector (semantic) + BM25 (keyword) retrieval fused with Reciprocal Rank Fusion for higher-quality context.
-- **Self-reflection loop** — The agent critiques its own responses and retries if the answer is too vague or lacks concrete numbers.
+- **Semantic self-reflection** — LLM-as-judge evaluates each answer and injects a targeted critique if it fails to use retrieved data (Reflexion pattern). Fired on 45% of eval questions vs 0% for rule-based triggers.
 - **Race time prediction** — Uses Riegel's formula applied to your personal bests to predict finishing times at any distance.
 - **Multi-turn memory** — Conversation history is preserved within a session so follow-up questions have full context.
 - **Real-time dashboard** — Split-screen layout with heart rate trends, weekly volume, training zones, personal bests, and injury log.
@@ -30,7 +30,7 @@ User ──► React Frontend (Vite + Tailwind)
          │        ↓                       │
          │  generate_response ──► tools   │  ◄── Garmin data tools (mock)
          │        ↓         ◄────┘        │
-         │  reflect_on_answer             │  ◄── Quality gate (length + numbers)
+         │  reflect_on_answer             │  ◄── Semantic quality gate (LLM-as-judge)
          │        ↓                       │
          │  generate_response (retry)     │
          └────────────────────────────────┘
@@ -38,7 +38,7 @@ User ──► React Frontend (Vite + Tailwind)
 
 **Key design decisions:**
 - `retrieve_context` runs before every LLM call — keeps generation focused on reasoning, not retrieval
-- Reflection triggers when answer is under 100 chars OR contains no digits — max 2 retries
+- Semantic reflection: LLM judge issues APPROVE or REVISE + targeted critique; max 2 retries
 - All Garmin tools fall back to `data/mock_garmin.json` — no live Garmin API required
 - LLM is configurable via env vars — works with any OpenAI-compatible endpoint (tested with Kimi K2.5)
 
@@ -181,8 +181,12 @@ PaceGenie/
 │   ├── mock_garmin.json  # Mock training data (24 runs)
 │   └── knowledge/        # RAG source documents (9 files)
 ├── evaluation/
-│   ├── metrics.py        # MRR@5, Personalization Score evaluation
-│   └── ablation.py       # 5-config ablation study (A→E)
+│   ├── run_agent.py      # Phase 1: run agent, cache replies to JSONL
+│   ├── run_judges.py     # Phase 2: score cache with 3 LLM-as-judge evaluators
+│   ├── run_ablation.py   # Orchestrate all 4 configs sequentially
+│   ├── langsmith_eval.py # LangSmith dataset + evaluator definitions
+│   ├── METRICS_REPORT.md # Full ablation findings with analysis
+│   └── cache/            # JSONL reply caches per config
 ├── tests/
 │   ├── conftest.py       # Shared fixtures and load_dotenv
 │   ├── test_graph.py     # End-to-end agent integration tests (10 questions)
@@ -214,15 +218,28 @@ PaceGenie/
 
 ---
 
-## Metrics
+## Evaluation Results
 
-| Metric | Target | How to collect |
-|--------|--------|----------------|
-| P95 response time | < 3000ms | `GET /metrics/timing` after 100 requests |
-| MRR@5 hybrid vs vector-only | > 0% improvement | `evaluation/metrics.py` after RAG ingest |
-| Personalization Score | ≥ 3.5 / 5.0 | LLM-as-Judge on 20 questions |
-| Hallucination rate | < 10% | 50 grounded questions, manual scoring |
-| Integration test pass rate | ≥ 9 / 10 | `pytest tests/test_graph.py` |
+4-config ablation study — LLM-as-judge, 20 Garmin-grounded questions ([full report](evaluation/METRICS_REPORT.md)):
+
+| Config | Hallucination (grounded ↑) | Answer Relevance ↑ | Personalization ↑ |
+|--------|---------------------------|-------------------|------------------|
+| baseline | 85% | 0.96 | 4.7 / 5.0 |
+| no-rag | 95% | 0.96 | 4.5 / 5.0 |
+| no-reflection | 80% | 0.98 | 4.5 / 5.0 |
+| **semantic-reflect** | 85% | 0.97 | **4.8 / 5.0** |
+
+**Key finding:** Semantic reflection (LLM-as-judge trigger) fired on 45% of questions vs 0% rule-based, improving Personalization 4.5→4.8/5.0 (+6.7%) and doubling avg tool calls per question (1.6→3.0).
+
+To run the evaluation pipeline:
+
+```bash
+# Phase 1 — run agent, cache replies
+uv run python evaluation/run_agent.py --config semantic-reflect --n 20
+
+# Phase 2 — score with LLM judges (+ optional LangSmith push)
+uv run python evaluation/run_judges.py --config semantic-reflect --n 20 --langsmith
+```
 
 ---
 

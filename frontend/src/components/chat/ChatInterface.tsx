@@ -60,6 +60,7 @@ export function ChatInterface({ userId, sessionId, backendOnline }: ChatInterfac
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [toolStatus, setToolStatus] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -82,8 +83,11 @@ export function ChatInterface({ userId, sessionId, backendOnline }: ChatInterfac
     setInputValue('');
     setIsTyping(true);
 
+    // Streaming message ID — we update this message in-place as tokens arrive
+    const streamingId = `stream-${Date.now()}`;
+
     try {
-      const response = await fetch(API_ENDPOINTS.chat, {
+      const response = await fetch(API_ENDPOINTS.chatStream, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -93,15 +97,60 @@ export function ChatInterface({ userId, sessionId, backendOnline }: ChatInterfac
         }),
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        setMessages(prev => [...prev, { role: 'assistant', content: data.reply, timestamp: new Date() }]);
-      } else {
-        setMessages(prev => [...prev, {
-          role: 'assistant',
-          content: 'Sorry, the backend returned an error. Please make sure FastAPI is running on port 8000.',
-          timestamp: new Date(),
-        }]);
+      if (!response.ok || !response.body) {
+        // Fallback to non-streaming if stream endpoint fails
+        const data = await response.json().catch(() => ({ reply: 'Backend returned an error.' }));
+        setMessages(prev => [...prev, { role: 'assistant', content: data.reply ?? 'Backend returned an error.', timestamp: new Date() }]);
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let firstToken = true;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const lines = decoder.decode(value, { stream: true }).split('\n');
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const data = JSON.parse(line.slice(6)) as { token?: string; status?: string; done?: boolean; error?: string };
+            if (data.status) {
+              // Tool call in progress — show status under the typing indicator
+              setToolStatus(data.status);
+            }
+            if (data.token) {
+              if (firstToken) {
+                // First content token — swap typing indicator for streaming message
+                firstToken = false;
+                setIsTyping(false);
+                setToolStatus(null);
+                setMessages(prev => [
+                  ...prev,
+                  { id: streamingId, role: 'assistant', content: data.token ?? '', timestamp: new Date() },
+                ]);
+              } else {
+                setMessages(prev => prev.map(m =>
+                  m.id === streamingId
+                    ? { ...m, content: m.content + data.token }
+                    : m
+                ));
+              }
+            }
+            if (data.error) {
+              setIsTyping(false);
+              setToolStatus(null);
+              setMessages(prev => [
+                ...prev.filter(m => m.id !== streamingId),
+                { role: 'assistant', content: `Error: ${data.error}`, timestamp: new Date() },
+              ]);
+            }
+          } catch {
+            // Malformed SSE line — skip
+          }
+        }
       }
     } catch {
       setMessages(prev => [...prev, {
@@ -111,6 +160,7 @@ export function ChatInterface({ userId, sessionId, backendOnline }: ChatInterfac
       }]);
     } finally {
       setIsTyping(false);
+      setToolStatus(null);
     }
   };
 
@@ -202,10 +252,15 @@ export function ChatInterface({ userId, sessionId, backendOnline }: ChatInterfac
                 <Sparkles className="w-4 h-4 text-white" />
               </div>
               <div className="bg-white/5 border border-white/6 rounded-2xl rounded-bl-md py-3 px-4">
-                <div className="flex gap-1">
-                  <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '0s' }} />
-                  <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
-                  <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
+                <div className="flex items-center gap-2">
+                  <div className="flex gap-1">
+                    <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '0s' }} />
+                    <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+                    <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
+                  </div>
+                  {toolStatus && (
+                    <span className="text-xs text-muted-foreground italic">{toolStatus}</span>
+                  )}
                 </div>
               </div>
             </div>
