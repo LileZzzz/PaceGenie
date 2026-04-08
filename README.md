@@ -1,5 +1,7 @@
 # PaceGenie — AI Running Coach
 
+**Live demo: [pace-genie.vercel.app](https://pace-genie.vercel.app)**
+
 An AI-powered running coach built with LangGraph, Hybrid RAG, and a React dashboard. Ask natural-language questions about your training data and get grounded, personalized answers backed by your actual Garmin metrics.
 
 ---
@@ -245,15 +247,18 @@ uv run python evaluation/run_judges.py --config semantic-reflect --n 20 --langsm
 
 ## Deployment
 
-**Backend (Railway):**
-1. Add a `Dockerfile` (FastAPI + uvicorn)
-2. Add PostgreSQL plugin in Railway dashboard
-3. Set env vars: `LLM_API_KEY`, `DATABASE_URL`, `GOOGLE_API_KEY`
-4. Run `uv run python rag/ingest.py` post-deploy
+**Live at [pace-genie.vercel.app](https://pace-genie.vercel.app)**
+
+Frontend on Vercel, backend on Render. To self-host:
+
+**Backend (any Docker host):**
+1. Set env vars: `LLM_MODEL`, `LLM_API_KEY`, `LLM_BASE_URL`
+2. Optional: `DATABASE_URL` + `GOOGLE_API_KEY` for RAG, `LANGSMITH_API_KEY` for tracing
+3. `docker build -t pacegenie . && docker run -p 8000:8000 pacegenie`
 
 **Frontend (Vercel):**
 1. Connect repo, set root to `frontend/`
-2. Set `VITE_API_URL=https://your-app.railway.app`
+2. Set `VITE_API_URL=https://your-backend-url`
 3. Deploy
 
 ---
